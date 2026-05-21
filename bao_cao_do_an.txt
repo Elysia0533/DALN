@@ -1,0 +1,40 @@
+BÁO CÁO TIẾN ĐỘ ĐỒ ÁN CƠ SỞ: ỨNG DỤNG ĐỌC TRUYỆN (vBook)
+
+1. NHỮNG TÍNH NĂNG ĐÃ HOÀN THIỆN (ĐÃ LÀM)
+--------------------------------------------------
+- Giao diện người dùng (UI/UX):
+  + Hỗ trợ giao diện Sáng/Tối (Light/Dark Mode) đồng nhất toàn ứng dụng.
+  + Màn hình Splash Screen, Trang chủ (Home), Khám phá (Explore), Thư viện (Library), Cộng đồng (Community), và Cá nhân (Profile).
+  + Tối ưu hiển thị danh sách truyện dạng lưới (Grid) giống các ứng dụng đọc truyện chuyên nghiệp (Tachiyomi).
+
+- Trình đọc truyện cốt lõi (Reader Core):
+  + Hỗ trợ đọc cả định dạng EPUB và TXT mượt mà.
+  + Tuỳ chỉnh trải nghiệm đọc (Font chữ hiện đại, Cỡ chữ, Màu nền OLED/Màu sách cũ).
+  + Cử chỉ vuốt/chạm thông minh (Chạm trái/phải để qua chương, chạm giữa để mở Toolbar).
+  + Mục lục thông minh dạng Drawer, tự động highlight chương đang đọc và cuộn đến chương hiện tại.
+
+- Quản lý Dữ liệu & Xử lý File (Data Management):
+  + Lưu trữ Local (SharedPreferences) cho cấu hình người dùng và danh sách thư viện.
+  + Chức năng "Lưu tiến độ đọc": Ứng dụng tự động ghi nhớ chương đang đọc dở và mở lại đúng vị trí đó ở lần tiếp theo.
+  + Trình quét Google Drive thông minh: Có khả năng quét và nhận diện cấu trúc thư mục lồng nhau (subfolders). Tự động gom các truyện có nhiều tập (Multi-Volume) và nối tên để hiển thị danh sách rõ ràng.
+  + Cơ chế API Service giả lập kết nối Server (sẵn sàng nâng cấp lên REST API thật).
+  + Tích hợp đọc truyện Offline từ bộ nhớ và đọc online từ Drive.
+
+- Chức năng tiện ích:
+  + Thanh tìm kiếm (Search) ở mục Khám phá để lọc truyện theo tên.
+
+
+2. NHỮNG TÍNH NĂNG CHƯA LÀM (ĐỀ XUẤT CHO TƯƠNG LAI)
+--------------------------------------------------
+- Hệ thống Đăng nhập / Đăng ký:
+  + Hiện tại màn hình Cộng đồng và Cá nhân mới chỉ làm giao diện (Mockup UI). Cần tích hợp Firebase Authentication để tạo tài khoản thật.
+
+- Cơ sở dữ liệu đám mây (Cloud Database):
+  + Tính năng Chat cộng đồng cần kết nối với Firebase Firestore hoặc Socket.IO để có thể gửi và nhận tin nhắn theo thời gian thực (Real-time).
+  + Tính năng đồng bộ hoá dữ liệu (Sync) tài khoản lên mây.
+
+- API Server Thật:
+  + Thay vì lưu danh sách truyện Khám phá qua Local, cần trỏ API Service tới một backend server (Node.js/Python) thực thụ để lấy truyện online.
+
+- Tải truyện Offline (Download):
+  + Chức năng cho phép người dùng click "Tải về" một bộ truyện trên Server để lưu vào mục Thư viện cá nhân (hiện tại mới hỗ trợ quét từ Google Drive).
