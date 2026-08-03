@@ -4,15 +4,20 @@ class Story {
   final String titleEng;
   final String content;
   final String contentEng;
-  final String description; // Mô tả / giới thiệu truyện (từ EPUB metadata)
+  final String description;
+  final String author;
+  final List<String> genres;
   final int totalChapters;
   final int currentChapter;
-  final int savedChapterIndex; // Chỉ mục chương đang đọc dở (0-based)
+  final int savedChapterIndex;
   final String iconUrl;
   final String localPath;
   final bool isLocal;
   final String driveFileId;
   final bool isFromDrive;
+  final String fileType;
+  final String pluginId;
+  final String storyUrl;
 
   Story({
     required this.id,
@@ -21,6 +26,8 @@ class Story {
     this.titleEng = "",
     this.contentEng = "",
     this.description = "",
+    this.author = "",
+    this.genres = const [],
     this.totalChapters = 1,
     this.currentChapter = 1,
     this.savedChapterIndex = 0,
@@ -29,6 +36,9 @@ class Story {
     this.isLocal = false,
     this.driveFileId = "",
     this.isFromDrive = false,
+    this.fileType = "",
+    this.pluginId = "",
+    this.storyUrl = "",
   });
 
   factory Story.fromJson(Map<String, dynamic> json) {
@@ -39,6 +49,12 @@ class Story {
       titleEng: json['titleEng'] ?? '',
       contentEng: json['contentEng'] ?? '',
       description: json['description'] ?? '',
+      author: json['author'] ?? '',
+      genres:
+          (json['genres'] as List<dynamic>?)
+              ?.map((e) => e.toString())
+              .toList() ??
+          [],
       totalChapters: json['totalChapters'] ?? 1,
       currentChapter: json['currentChapter'] ?? 1,
       savedChapterIndex: json['savedChapterIndex'] ?? 0,
@@ -47,6 +63,9 @@ class Story {
       isLocal: json['isLocal'] ?? false,
       driveFileId: json['driveFileId'] ?? '',
       isFromDrive: json['isFromDrive'] ?? false,
+      fileType: json['fileType'] ?? '',
+      pluginId: json['pluginId'] ?? '',
+      storyUrl: json['storyUrl'] ?? '',
     );
   }
 
@@ -58,6 +77,8 @@ class Story {
       'titleEng': titleEng,
       'contentEng': contentEng,
       'description': description,
+      'author': author,
+      'genres': genres,
       'totalChapters': totalChapters,
       'currentChapter': currentChapter,
       'savedChapterIndex': savedChapterIndex,
@@ -66,6 +87,9 @@ class Story {
       'isLocal': isLocal,
       'driveFileId': driveFileId,
       'isFromDrive': isFromDrive,
+      'fileType': fileType,
+      'pluginId': pluginId,
+      'storyUrl': storyUrl,
     };
   }
 
@@ -76,6 +100,8 @@ class Story {
     String? content,
     String? contentEng,
     String? description,
+    String? author,
+    List<String>? genres,
     int? totalChapters,
     int? currentChapter,
     int? savedChapterIndex,
@@ -84,6 +110,9 @@ class Story {
     bool? isLocal,
     String? driveFileId,
     bool? isFromDrive,
+    String? fileType,
+    String? pluginId,
+    String? storyUrl,
   }) {
     return Story(
       id: id ?? this.id,
@@ -92,6 +121,8 @@ class Story {
       content: content ?? this.content,
       contentEng: contentEng ?? this.contentEng,
       description: description ?? this.description,
+      author: author ?? this.author,
+      genres: genres ?? this.genres,
       totalChapters: totalChapters ?? this.totalChapters,
       currentChapter: currentChapter ?? this.currentChapter,
       savedChapterIndex: savedChapterIndex ?? this.savedChapterIndex,
@@ -100,6 +131,9 @@ class Story {
       isLocal: isLocal ?? this.isLocal,
       driveFileId: driveFileId ?? this.driveFileId,
       isFromDrive: isFromDrive ?? this.isFromDrive,
+      fileType: fileType ?? this.fileType,
+      pluginId: pluginId ?? this.pluginId,
+      storyUrl: storyUrl ?? this.storyUrl,
     );
   }
 }

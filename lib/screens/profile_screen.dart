@@ -1,162 +1,1514 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:file_picker/file_picker.dart';
+import 'package:image/image.dart' as img;
+import 'package:path_provider/path_provider.dart';
+import 'package:provider/provider.dart';
+import 'dart:io';
+import '../models/reading_marker.dart';
+import '../models/story.dart';
+import '../services/api_service.dart';
+import '../services/firebase_backend_service.dart';
+import '../theme/reading_settings_provider.dart';
+import '../theme/theme_provider.dart';
+import '../theme/user_provider.dart';
+import 'community_screen.dart';
+import 'explore_screen.dart';
+import 'story_detail_screen.dart';
 
 class ProfileScreen extends StatelessWidget {
   const ProfileScreen({super.key});
 
-  // Giả lập trạng thái chưa đăng nhập
-  final bool isLoggedIn = false;
+  String _formatAccountError(Object error) {
+    final message = error.toString().replaceFirst('Exception: ', '');
+    final lower = message.toLowerCase();
+
+    if (lower.contains('permission-denied') ||
+        lower.contains('permission_denied') ||
+        lower.contains('cloud_firestore')) {
+      return 'Tài khoản đã đăng nhập nhưng chưa có quyền đồng bộ dữ liệu. Hãy kiểm tra quyền truy cập cho bản demo.';
+    }
+    if (lower.contains('network') ||
+        lower.contains('unavailable') ||
+        lower.contains('timeout')) {
+      return 'Không kết nối được dịch vụ đăng nhập. Hãy kiểm tra mạng rồi thử lại.';
+    }
+    if (lower.contains('firebase')) {
+      return 'Dịch vụ đăng nhập chưa sẵn sàng. Hãy kiểm tra cấu hình bản demo.';
+    }
+    return message;
+  }
+
+  void _showLoginDialog(BuildContext context) {
+    final isCloudReady = FirebaseBackendService.isInitialized;
+    final emailController = TextEditingController();
+    final passwordController = TextEditingController();
+    final displayNameController = TextEditingController();
+    int selectedColor = 0xFF4CAF50;
+    bool isLogin = true;
+    bool isSubmitting = false;
+    String? errorText;
+
+    showDialog(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setDialogState) => AlertDialog(
+          title: Text(isLogin ? 'Đăng nhập' : 'Đăng ký tài khoản'),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                if (!isCloudReady) ...[
+                  Container(
+                    padding: const EdgeInsets.all(10),
+                    decoration: BoxDecoration(
+                      color: Theme.of(
+                        context,
+                      ).colorScheme.primary.withValues(alpha: 0.08),
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: const Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Icon(Icons.phone_android_rounded, size: 18),
+                        SizedBox(width: 8),
+                        Expanded(
+                          child: Text(
+                            'Bản test sẽ lưu tài khoản trên thiết bị này. Khi bật đồng bộ, app sẽ dùng tài khoản đám mây.',
+                            style: TextStyle(fontSize: 12),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                ],
+                TextField(
+                  controller: emailController,
+                  decoration: const InputDecoration(
+                    labelText: 'Email',
+                    hintText: 'admin@example.com',
+                    prefixIcon: Icon(Icons.email_outlined),
+                    border: OutlineInputBorder(),
+                  ),
+                  keyboardType: TextInputType.emailAddress,
+                ),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: passwordController,
+                  decoration: const InputDecoration(
+                    labelText: 'Mật khẩu',
+                    prefixIcon: Icon(Icons.lock_outline),
+                    border: OutlineInputBorder(),
+                  ),
+                  obscureText: true,
+                ),
+                if (!isLogin) ...[
+                  const SizedBox(height: 12),
+                  TextField(
+                    controller: displayNameController,
+                    decoration: const InputDecoration(
+                      labelText: 'Tên hiển thị',
+                      hintText: 'Nhập tên của bạn...',
+                      prefixIcon: Icon(Icons.person_outline),
+                      border: OutlineInputBorder(),
+                    ),
+                    maxLength: 30,
+                    textCapitalization: TextCapitalization.words,
+                  ),
+                  const SizedBox(height: 8),
+                  const Text(
+                    'Màu avatar',
+                    style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
+                  ),
+                  const SizedBox(height: 8),
+                  Wrap(
+                    spacing: 8,
+                    children: UserProvider.avatarColors.map((c) {
+                      final val = c['value'] as int;
+                      final isSelected = val == selectedColor;
+                      return GestureDetector(
+                        onTap: () => setDialogState(() => selectedColor = val),
+                        child: Container(
+                          width: 36,
+                          height: 36,
+                          decoration: BoxDecoration(
+                            color: Color(val),
+                            shape: BoxShape.circle,
+                            border: isSelected
+                                ? Border.all(color: Colors.white, width: 2.5)
+                                : null,
+                            boxShadow: isSelected
+                                ? [
+                                    BoxShadow(
+                                      color: Color(val).withValues(alpha: 0.5),
+                                      blurRadius: 6,
+                                    ),
+                                  ]
+                                : null,
+                          ),
+                          child: isSelected
+                              ? const Icon(
+                                  Icons.check,
+                                  color: Colors.white,
+                                  size: 18,
+                                )
+                              : null,
+                        ),
+                      );
+                    }).toList(),
+                  ),
+                  const SizedBox(height: 8),
+                  const Text(
+                    'Một số tài khoản được cấp quyền quản trị bởi hệ thống.',
+                    style: TextStyle(fontSize: 12, color: Colors.grey),
+                  ),
+                ],
+                if (errorText != null) ...[
+                  const SizedBox(height: 12),
+                  Text(
+                    errorText!,
+                    style: const TextStyle(color: Colors.red, fontSize: 13),
+                  ),
+                  if (isLogin &&
+                      (errorText!.toLowerCase().contains('xac nhan') ||
+                          errorText!.toLowerCase().contains('xác nhận'))) ...[
+                    const SizedBox(height: 4),
+                    TextButton.icon(
+                      onPressed: isSubmitting
+                          ? null
+                          : () {
+                              final email = emailController.text.trim();
+                              if (email.isEmpty) return;
+                              Navigator.pop(ctx);
+                              _showVerifyEmailDialog(
+                                context,
+                                email: email,
+                                colorValue: selectedColor,
+                              );
+                            },
+                      icon: const Icon(Icons.mark_email_read_outlined),
+                      label: const Text('Nhập mã xác nhận'),
+                    ),
+                  ],
+                ],
+                const SizedBox(height: 8),
+                if (isLogin)
+                  Align(
+                    alignment: Alignment.centerRight,
+                    child: TextButton(
+                      onPressed: isSubmitting
+                          ? null
+                          : () {
+                              final email = emailController.text.trim();
+                              Navigator.pop(ctx);
+                              _showPasswordResetDialog(
+                                context,
+                                initialEmail: email,
+                              );
+                            },
+                      child: const Text('Quên mật khẩu?'),
+                    ),
+                  ),
+                TextButton(
+                  onPressed: isSubmitting
+                      ? null
+                      : () => setDialogState(() {
+                          isLogin = !isLogin;
+                          errorText = null;
+                        }),
+                  child: Text(
+                    isLogin
+                        ? 'Chưa có tài khoản? Đăng ký'
+                        : 'Đã có tài khoản? Đăng nhập',
+                  ),
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: isSubmitting ? null : () => Navigator.pop(ctx),
+              child: const Text('Hủy'),
+            ),
+            FilledButton(
+              onPressed: isSubmitting
+                  ? null
+                  : () async {
+                      final email = emailController.text.trim();
+                      final password = passwordController.text;
+                      final displayName = displayNameController.text.trim();
+                      if (email.isEmpty || password.isEmpty) {
+                        setDialogState(
+                          () => errorText = 'Vui lòng nhập email và mật khẩu.',
+                        );
+                        return;
+                      }
+                      if (!isLogin && displayName.isEmpty) {
+                        setDialogState(
+                          () => errorText = 'Vui lòng nhập tên hiển thị.',
+                        );
+                        return;
+                      }
+                      setDialogState(() {
+                        isSubmitting = true;
+                        errorText = null;
+                      });
+                      try {
+                        final provider = context.read<UserProvider>();
+                        if (isLogin) {
+                          await provider.loginWithBackend(
+                            email: email,
+                            password: password,
+                            colorValue: selectedColor,
+                          );
+                        } else {
+                          final result = await provider.registerWithBackend(
+                            email: email,
+                            password: password,
+                            displayName: displayName,
+                            colorValue: selectedColor,
+                          );
+                          if (!ctx.mounted) return;
+                          Navigator.pop(ctx);
+                          if (!context.mounted) return;
+                          if (result.emailVerificationRequired) {
+                            _showVerifyEmailDialog(
+                              context,
+                              email: email,
+                              colorValue: selectedColor,
+                            );
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              const SnackBar(
+                                content: Text(
+                                  'Đã gửi link xác nhận. Hãy mở email, bấm link rồi quay lại app.',
+                                ),
+                              ),
+                            );
+                            return;
+                          }
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(
+                              content: Text('Đăng ký thành công!'),
+                            ),
+                          );
+                          return;
+                        }
+                        if (!ctx.mounted) return;
+                        Navigator.pop(ctx);
+                        if (!context.mounted) return;
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          SnackBar(
+                            content: Text(
+                              isLogin
+                                  ? 'Đăng nhập thành công!'
+                                  : 'Đăng ký thành công!',
+                            ),
+                          ),
+                        );
+                      } catch (e) {
+                        setDialogState(() {
+                          isSubmitting = false;
+                          errorText = _formatAccountError(e);
+                        });
+                      }
+                    },
+              child: isSubmitting
+                  ? const SizedBox(
+                      width: 18,
+                      height: 18,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : Text(isLogin ? 'Đăng nhập' : 'Đăng ký'),
+            ),
+          ],
+        ),
+      ),
+    ).whenComplete(() {
+      emailController.dispose();
+      passwordController.dispose();
+      displayNameController.dispose();
+    });
+  }
+
+  void _showVerifyEmailDialog(
+    BuildContext context, {
+    required String email,
+    required int colorValue,
+  }) {
+    bool isSubmitting = false;
+    bool isResending = false;
+    String? errorText;
+
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setDialogState) => AlertDialog(
+          title: const Text('Xác nhận email'),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'Đã gửi link xác nhận tới $email. Mở hộp thư, bấm link xác nhận, sau đó quay lại app và bấm nút bên dưới.',
+                  style: const TextStyle(fontSize: 13),
+                ),
+                const SizedBox(height: 12),
+                const Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Icon(Icons.mark_email_read_outlined, size: 20),
+                    SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        'Nếu không thấy email, hãy kiểm tra Spam/Quảng cáo rồi bấm Gửi lại email.',
+                        style: TextStyle(fontSize: 12, color: Colors.grey),
+                      ),
+                    ),
+                  ],
+                ),
+                if (errorText != null) ...[
+                  const SizedBox(height: 12),
+                  Text(
+                    errorText!,
+                    style: const TextStyle(color: Colors.red, fontSize: 13),
+                  ),
+                ],
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: isSubmitting || isResending
+                  ? null
+                  : () => Navigator.pop(ctx),
+              child: const Text('Để sau'),
+            ),
+            TextButton(
+              onPressed: isSubmitting || isResending
+                  ? null
+                  : () async {
+                      setDialogState(() {
+                        isResending = true;
+                        errorText = null;
+                      });
+                      try {
+                        final result = await context
+                            .read<UserProvider>()
+                            .resendVerificationCode(email);
+                        if (!ctx.mounted) return;
+                        if (result.alreadyVerified) {
+                          Navigator.pop(ctx);
+                          if (!context.mounted) return;
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(
+                              content: Text(
+                                'Email đã xác nhận. Hãy đăng nhập lại.',
+                              ),
+                            ),
+                          );
+                          return;
+                        }
+                        setDialogState(() {
+                          isResending = false;
+                        });
+                        if (!context.mounted) return;
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(
+                            content: Text('Đã gửi lại email xác nhận.'),
+                          ),
+                        );
+                      } catch (e) {
+                        setDialogState(() {
+                          isResending = false;
+                          errorText = _formatAccountError(e);
+                        });
+                      }
+                    },
+              child: isResending
+                  ? const SizedBox(
+                      width: 18,
+                      height: 18,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : const Text('Gửi lại email'),
+            ),
+            FilledButton(
+              onPressed: isSubmitting || isResending
+                  ? null
+                  : () async {
+                      setDialogState(() {
+                        isSubmitting = true;
+                        errorText = null;
+                      });
+                      try {
+                        await context
+                            .read<UserProvider>()
+                            .verifyEmailWithBackend(
+                              email: email,
+                              code: '',
+                              colorValue: colorValue,
+                            );
+                        if (!ctx.mounted) return;
+                        Navigator.pop(ctx);
+                        if (!context.mounted) return;
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(
+                            content: Text('Xác nhận email thành công!'),
+                          ),
+                        );
+                      } catch (e) {
+                        setDialogState(() {
+                          isSubmitting = false;
+                          errorText = _formatAccountError(e);
+                        });
+                      }
+                    },
+              child: isSubmitting
+                  ? const SizedBox(
+                      width: 18,
+                      height: 18,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : const Text('Tôi đã xác nhận'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _showPasswordResetDialog(
+    BuildContext context, {
+    String initialEmail = '',
+  }) {
+    final emailController = TextEditingController(text: initialEmail);
+    bool isSubmitting = false;
+    String? errorText;
+
+    showDialog(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setDialogState) => AlertDialog(
+          title: const Text('Khôi phục mật khẩu'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                'Nhập email tài khoản. Ứng dụng sẽ gửi link đặt lại mật khẩu vào hộp thư của bạn.',
+                style: TextStyle(fontSize: 13),
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: emailController,
+                decoration: const InputDecoration(
+                  labelText: 'Email',
+                  prefixIcon: Icon(Icons.email_outlined),
+                  border: OutlineInputBorder(),
+                ),
+                keyboardType: TextInputType.emailAddress,
+              ),
+              if (errorText != null) ...[
+                const SizedBox(height: 12),
+                Text(
+                  errorText!,
+                  style: const TextStyle(color: Colors.red, fontSize: 13),
+                ),
+              ],
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: isSubmitting ? null : () => Navigator.pop(ctx),
+              child: const Text('Hủy'),
+            ),
+            FilledButton(
+              onPressed: isSubmitting
+                  ? null
+                  : () async {
+                      final email = emailController.text.trim();
+                      if (email.isEmpty) {
+                        setDialogState(
+                          () => errorText = 'Vui lòng nhập email.',
+                        );
+                        return;
+                      }
+                      setDialogState(() {
+                        isSubmitting = true;
+                        errorText = null;
+                      });
+                      try {
+                        await context
+                            .read<UserProvider>()
+                            .sendPasswordResetEmail(email);
+                        if (!ctx.mounted) return;
+                        Navigator.pop(ctx);
+                        if (!context.mounted) return;
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(
+                            content: Text(
+                              'Đã gửi email khôi phục mật khẩu. Hãy kiểm tra hộp thư.',
+                            ),
+                          ),
+                        );
+                      } catch (e) {
+                        setDialogState(() {
+                          isSubmitting = false;
+                          errorText = _formatAccountError(e);
+                        });
+                      }
+                    },
+              child: isSubmitting
+                  ? const SizedBox(
+                      width: 18,
+                      height: 18,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : const Text('Gửi email'),
+            ),
+          ],
+        ),
+      ),
+    ).whenComplete(emailController.dispose);
+  }
+
+  ImageProvider? _avatarImageProvider(String path) {
+    final trimmed = path.trim();
+    if (trimmed.isEmpty) return null;
+    if (trimmed.startsWith('http://') || trimmed.startsWith('https://')) {
+      return NetworkImage(trimmed);
+    }
+    final file = File(trimmed);
+    if (file.existsSync()) return FileImage(file);
+    return null;
+  }
+
+  Future<String?> _pickAndCropAvatar(BuildContext context) async {
+    final result = await FilePicker.pickFiles(
+      type: FileType.image,
+      withData: true,
+    );
+    if (result == null || result.files.isEmpty) return null;
+
+    final picked = result.files.single;
+    final bytes = picked.bytes ?? await File(picked.path!).readAsBytes();
+    if (!context.mounted) return null;
+    final croppedBytes = await _showAvatarCropDialog(context, bytes);
+    if (croppedBytes == null) return null;
+
+    final appDir = await getApplicationDocumentsDirectory();
+    final avatarDir = Directory('${appDir.path}/avatars');
+    await avatarDir.create(recursive: true);
+    final file = File(
+      '${avatarDir.path}/avatar_${DateTime.now().millisecondsSinceEpoch}.jpg',
+    );
+    await file.writeAsBytes(croppedBytes, flush: true);
+    return file.path;
+  }
+
+  Future<Uint8List?> _showAvatarCropDialog(
+    BuildContext context,
+    Uint8List bytes,
+  ) async {
+    double zoom = 1;
+    double offsetX = 0;
+    double offsetY = 0;
+    String? errorText;
+
+    return showDialog<Uint8List>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setDialogState) => AlertDialog(
+          title: const Text('Căn chỉnh avatar'),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Container(
+                  width: 220,
+                  height: 220,
+                  clipBehavior: Clip.antiAlias,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    color: Colors.black,
+                    border: Border.all(
+                      color: Theme.of(context).colorScheme.primary,
+                      width: 2,
+                    ),
+                  ),
+                  child: Transform.translate(
+                    offset: Offset(offsetX * 70, offsetY * 70),
+                    child: Transform.scale(
+                      scale: zoom,
+                      child: Image.memory(bytes, fit: BoxFit.cover),
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 16),
+                _AvatarSlider(
+                  label: 'Phóng to',
+                  value: zoom,
+                  min: 1,
+                  max: 3,
+                  onChanged: (value) => setDialogState(() => zoom = value),
+                ),
+                _AvatarSlider(
+                  label: 'Ngang',
+                  value: offsetX,
+                  min: -1,
+                  max: 1,
+                  onChanged: (value) => setDialogState(() => offsetX = value),
+                ),
+                _AvatarSlider(
+                  label: 'Dọc',
+                  value: offsetY,
+                  min: -1,
+                  max: 1,
+                  onChanged: (value) => setDialogState(() => offsetY = value),
+                ),
+                if (errorText != null) ...[
+                  const SizedBox(height: 8),
+                  Text(
+                    errorText!,
+                    style: const TextStyle(color: Colors.red, fontSize: 12),
+                  ),
+                ],
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text('Hủy'),
+            ),
+            FilledButton(
+              onPressed: () {
+                try {
+                  final cropped = _cropAvatarBytes(
+                    bytes,
+                    zoom: zoom,
+                    offsetX: offsetX,
+                    offsetY: offsetY,
+                  );
+                  Navigator.pop(ctx, cropped);
+                } catch (_) {
+                  setDialogState(() => errorText = 'Không thể xử lý ảnh này.');
+                }
+              },
+              child: const Text('Dùng ảnh này'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Uint8List _cropAvatarBytes(
+    Uint8List bytes, {
+    required double zoom,
+    required double offsetX,
+    required double offsetY,
+  }) {
+    final source = img.decodeImage(bytes);
+    if (source == null) {
+      throw Exception('Invalid image');
+    }
+
+    final minSide = source.width < source.height ? source.width : source.height;
+    final cropSize = (minSide / zoom).round().clamp(64, minSide);
+    final maxX = source.width - cropSize;
+    final maxY = source.height - cropSize;
+    final centerX = source.width / 2 - cropSize / 2 - offsetX * maxX / 2;
+    final centerY = source.height / 2 - cropSize / 2 - offsetY * maxY / 2;
+    final x = centerX.round().clamp(0, maxX);
+    final y = centerY.round().clamp(0, maxY);
+
+    final cropped = img.copyCrop(source, x, y, cropSize, cropSize);
+    final resized = img.copyResize(cropped, width: 512, height: 512);
+    return Uint8List.fromList(img.encodeJpg(resized, quality: 88));
+  }
+
+  void _showEditProfileDialog(BuildContext context) {
+    final user = context.read<UserProvider>();
+    final nameController = TextEditingController(text: user.name);
+    int selectedColor = user.avatarColor.toARGB32();
+    String selectedAvatarUrl = user.avatarUrl;
+    bool isSubmitting = false;
+    String? errorText;
+
+    showDialog(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setDialogState) => AlertDialog(
+          title: const Text('Chỉnh sửa thông tin cá nhân'),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Center(
+                  child: Column(
+                    children: [
+                      CircleAvatar(
+                        radius: 44,
+                        backgroundColor: Color(selectedColor),
+                        backgroundImage: _avatarImageProvider(
+                          selectedAvatarUrl,
+                        ),
+                        child: _avatarImageProvider(selectedAvatarUrl) == null
+                            ? Text(
+                                user.initials,
+                                style: const TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 24,
+                                  fontWeight: FontWeight.bold,
+                                ),
+                              )
+                            : null,
+                      ),
+                      const SizedBox(height: 8),
+                      OutlinedButton.icon(
+                        onPressed: isSubmitting
+                            ? null
+                            : () async {
+                                final path = await _pickAndCropAvatar(context);
+                                if (path == null) return;
+                                setDialogState(() => selectedAvatarUrl = path);
+                              },
+                        icon: const Icon(Icons.photo_camera_outlined),
+                        label: const Text('Chọn ảnh avatar'),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: nameController,
+                  decoration: const InputDecoration(
+                    labelText: 'Tên hiển thị',
+                    prefixIcon: Icon(Icons.badge_outlined),
+                    border: OutlineInputBorder(),
+                  ),
+                  maxLength: 30,
+                  textCapitalization: TextCapitalization.words,
+                ),
+                const SizedBox(height: 8),
+                const Text(
+                  'Màu avatar',
+                  style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
+                ),
+                const SizedBox(height: 8),
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: UserProvider.avatarColors.map((c) {
+                    final value = c['value'] as int;
+                    final isSelected = value == selectedColor;
+                    return GestureDetector(
+                      onTap: () => setDialogState(() => selectedColor = value),
+                      child: Container(
+                        width: 38,
+                        height: 38,
+                        decoration: BoxDecoration(
+                          color: Color(value),
+                          shape: BoxShape.circle,
+                          border: isSelected
+                              ? Border.all(
+                                  color: Theme.of(context).colorScheme.primary,
+                                  width: 3,
+                                )
+                              : null,
+                        ),
+                        child: isSelected
+                            ? const Icon(
+                                Icons.check,
+                                color: Colors.white,
+                                size: 18,
+                              )
+                            : null,
+                      ),
+                    );
+                  }).toList(),
+                ),
+                if (errorText != null) ...[
+                  const SizedBox(height: 12),
+                  Text(
+                    errorText!,
+                    style: const TextStyle(color: Colors.red, fontSize: 13),
+                  ),
+                ],
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: isSubmitting ? null : () => Navigator.pop(ctx),
+              child: const Text('Hủy'),
+            ),
+            FilledButton(
+              onPressed: isSubmitting
+                  ? null
+                  : () async {
+                      final name = nameController.text.trim();
+                      if (name.isEmpty) {
+                        setDialogState(
+                          () => errorText = 'Vui lòng nhập tên hiển thị.',
+                        );
+                        return;
+                      }
+                      setDialogState(() {
+                        isSubmitting = true;
+                        errorText = null;
+                      });
+                      try {
+                        await context.read<UserProvider>().updateProfile(
+                          displayName: name,
+                          colorValue: selectedColor,
+                          avatarUrl: selectedAvatarUrl,
+                        );
+                        if (!ctx.mounted) return;
+                        Navigator.pop(ctx);
+                        if (!context.mounted) return;
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(
+                            content: Text('Đã cập nhật thông tin cá nhân.'),
+                          ),
+                        );
+                      } catch (e) {
+                        setDialogState(() {
+                          isSubmitting = false;
+                          errorText = _formatAccountError(e);
+                        });
+                      }
+                    },
+              child: isSubmitting
+                  ? const SizedBox(
+                      width: 18,
+                      height: 18,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : const Text('Lưu'),
+            ),
+          ],
+        ),
+      ),
+    ).whenComplete(nameController.dispose);
+  }
+
+  void _showLogoutDialog(BuildContext context) {
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Đăng xuất'),
+        content: const Text('Bạn có chắc muốn đăng xuất khỏi tài khoản này?'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Hủy'),
+          ),
+          FilledButton(
+            onPressed: () {
+              context.read<UserProvider>().logout();
+              Navigator.pop(ctx);
+            },
+            style: FilledButton.styleFrom(backgroundColor: Colors.red),
+            child: const Text('Đăng xuất'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _showStorageInfo(BuildContext context) {
+    final colorScheme = Theme.of(context).colorScheme;
+    showModalBottomSheet(
+      context: context,
+      showDragHandle: true,
+      builder: (ctx) {
+        return SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(20, 4, 20, 24),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  'Lưu trữ offline',
+                  style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800),
+                ),
+                const SizedBox(height: 12),
+                _StorageInfoRow(
+                  icon: Icons.file_present_rounded,
+                  title: 'Định dạng hỗ trợ',
+                  value: 'EPUB, PDF, TXT',
+                  color: colorScheme.primary,
+                ),
+                _StorageInfoRow(
+                  icon: Icons.download_done_rounded,
+                  title: 'Truyện đã tải',
+                  value: 'Lưu trong vùng dữ liệu riêng của ứng dụng',
+                  color: const Color(0xFF4E8F7E),
+                ),
+                _StorageInfoRow(
+                  icon: Icons.cached_rounded,
+                  title: 'Cache đọc Drive',
+                  value: 'File và ảnh bìa được cache để mở lại nhanh hơn',
+                  color: const Color(0xFF5A7DB8),
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  'Khi xóa truyện khỏi kệ sách, app chỉ dọn các file thuộc thư mục dữ liệu của vBook.',
+                  style: TextStyle(
+                    color: colorScheme.onSurfaceVariant,
+                    fontSize: 12,
+                    height: 1.35,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  void _copyShareInvite(BuildContext context) {
+    Clipboard.setData(
+      const ClipboardData(
+        text:
+            'Mình đang dùng vBook để đọc EPUB/PDF/TXT, tải truyện offline và nghe truyện bằng TTS.',
+      ),
+    );
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('Đã sao chép lời mời chia sẻ vBook.')),
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
-    final bgColor = isDark ? const Color(0xFF121212) : Colors.white;
-    final sectionBgColor = isDark ? const Color(0xFF1C1C1E) : Colors.grey.shade100;
-    final textColor = isDark ? Colors.white : Colors.black87;
+    final colorScheme = Theme.of(context).colorScheme;
+    final sectionBgColor = colorScheme.surfaceContainerHighest.withValues(
+      alpha: isDark ? 0.46 : 0.72,
+    );
+    final textColor = colorScheme.onSurface;
+    final userProvider = context.watch<UserProvider>();
+    final themeProvider = context.watch<ThemeProvider>();
+    final readingSettings = context.watch<ReadingSettingsProvider>();
 
     return Scaffold(
-      backgroundColor: bgColor,
       appBar: AppBar(
-        backgroundColor: isDark ? const Color(0xFF1A1A1A) : Colors.white,
-        elevation: 0,
-        title: Text('Cá nhân', style: TextStyle(fontWeight: FontWeight.bold, color: textColor)),
+        title: const Text('Cá nhân'),
         actions: [
-          if (isLoggedIn)
-            Padding(
-              padding: const EdgeInsets.only(right: 16.0, top: 10, bottom: 10),
-              child: ElevatedButton(
-                onPressed: () {},
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: isDark ? Colors.grey.shade800 : Colors.grey.shade200,
-                  foregroundColor: textColor,
-                  elevation: 0,
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-                  padding: const EdgeInsets.symmetric(horizontal: 16),
-                ),
-                child: const Text('Đăng xuất', style: TextStyle(fontWeight: FontWeight.bold)),
-              ),
-            )
+          if (userProvider.isLoggedIn)
+            IconButton(
+              onPressed: () => _showLogoutDialog(context),
+              icon: const Icon(Icons.logout_rounded),
+              tooltip: 'Đăng xuất',
+            ),
         ],
       ),
       body: SingleChildScrollView(
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // Profile Header
-            if (isLoggedIn)
-              Padding(
-                padding: const EdgeInsets.all(20.0),
-                child: Row(
-                  children: [
-                    Stack(
-                      children: [
-                        CircleAvatar(
-                          radius: 40,
-                          backgroundColor: isDark ? Colors.grey.shade800 : Colors.grey.shade300,
-                          child: Icon(Icons.person, size: 50, color: isDark ? Colors.grey.shade400 : Colors.grey.shade500),
-                        ),
-                        Positioned(
-                          right: 0,
-                          top: 0,
-                          child: Container(
-                            padding: const EdgeInsets.all(4),
-                            decoration: BoxDecoration(
-                              color: isDark ? Colors.grey.shade800 : Colors.white,
-                              shape: BoxShape.circle,
-                              border: Border.all(color: bgColor, width: 2),
-                            ),
-                            child: const Icon(Icons.image, size: 12),
-                          ),
-                        )
-                      ],
-                    ),
-                    const SizedBox(width: 16),
-                    Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Row(
-                          children: [
-                            Text('elesis', style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold, color: textColor)),
-                            const SizedBox(width: 8),
-                            Container(
-                              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                              decoration: BoxDecoration(
-                                color: Colors.transparent,
-                                border: Border.all(color: Colors.blue.shade300),
-                                borderRadius: BorderRadius.circular(4),
-                              ),
-                              child: Text('Free', style: TextStyle(color: Colors.blue.shade300, fontSize: 10, fontWeight: FontWeight.bold)),
-                            )
-                          ],
-                        ),
-                        const SizedBox(height: 4),
-                        Text('vglduc25@gmail.com', style: TextStyle(color: isDark ? Colors.grey.shade500 : Colors.grey.shade600)),
-                      ],
-                    )
-                  ],
-                ),
-              )
-            else
-              Padding(
-                padding: const EdgeInsets.all(20.0),
-                child: Row(
-                  children: [
-                    CircleAvatar(
-                      radius: 40,
-                      backgroundColor: isDark ? Colors.grey.shade800 : Colors.grey.shade300,
-                      child: Icon(Icons.person, size: 50, color: isDark ? Colors.grey.shade500 : Colors.grey.shade400),
-                    ),
-                    const SizedBox(width: 16),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text('Khách', style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold, color: textColor)),
-                          const SizedBox(height: 8),
-                          ElevatedButton(
-                            onPressed: () {},
-                            style: ElevatedButton.styleFrom(
-                              backgroundColor: Theme.of(context).primaryColor,
-                              foregroundColor: Colors.white,
-                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-                              padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 8),
-                            ),
-                            child: const Text('Đăng nhập / Đăng ký', style: TextStyle(fontWeight: FontWeight.bold)),
-                          ),
-                        ],
-                      ),
-                    )
-                  ],
+            userProvider.isLoggedIn
+                ? _buildSignedInHeader(context, userProvider, textColor)
+                : _buildGuestHeader(context, isDark, textColor),
+            const Divider(height: 1),
+            if (userProvider.isLoggedIn) ...[
+              _buildSectionHeader('Tài khoản', sectionBgColor, textColor),
+              _buildSettingsTile(
+                context,
+                icon: Icons.edit_outlined,
+                title: 'Chỉnh sửa thông tin cá nhân',
+                subtitle: 'Tên hiển thị và màu avatar',
+                onTap: () => _showEditProfileDialog(context),
+              ),
+              _buildSettingsTile(
+                context,
+                icon: Icons.password_rounded,
+                title: 'Khôi phục mật khẩu',
+                subtitle: 'Gửi email đặt lại mật khẩu',
+                onTap: () => _showPasswordResetDialog(
+                  context,
+                  initialEmail: userProvider.email,
                 ),
               ),
-
-            // Ứng dụng Section
+            ],
+            if (userProvider.isAdmin)
+              _buildAdminSection(context, sectionBgColor, textColor),
             _buildSectionHeader('Ứng dụng', sectionBgColor, textColor),
-            _buildListTile(Icons.book_outlined, 'Lưu trữ', isDark),
-            _buildListTile(Icons.bar_chart_rounded, 'Thống kê', isDark),
-            _buildListTile(Icons.extension_outlined, 'Phần mở rộng', isDark),
-            _buildListTile(Icons.sync_rounded, 'Đồng bộ & sao lưu', isDark),
-            _buildListTile(Icons.settings_outlined, 'Cài đặt', isDark),
-
-            // Kết nối Section
+            _buildThemeTile(context, isDark, themeProvider),
+            _buildSettingsTile(
+              context,
+              icon: Icons.bookmark_border_rounded,
+              title: 'Lưu trữ',
+              subtitle: 'EPUB, PDF, TXT offline',
+              onTap: () => _showStorageInfo(context),
+            ),
+            _buildSectionHeader('Thống kê kệ sách', sectionBgColor, textColor),
+            _buildLibraryStatsPanel(context),
+            _buildSettingsTile(
+              context,
+              icon: Icons.sync_rounded,
+              title: 'Đồng bộ tài khoản',
+              subtitle: _syncStatusText(userProvider),
+              onTap: userProvider.isLoggedIn
+                  ? null
+                  : () => _showLoginDialog(context),
+              trailing: _buildSyncStatusIcon(context, userProvider),
+            ),
+            _buildAudioSection(context, readingSettings, sectionBgColor),
             _buildSectionHeader('Kết nối', sectionBgColor, textColor),
-            _buildListTile(Icons.share_outlined, 'Mời bạn bè sử dụng', isDark),
-            _buildListTile(Icons.facebook_outlined, 'Theo dõi Fanpage', isDark),
-            _buildListTile(Icons.discord_outlined, 'Tham gia discord', isDark),
-
-            const SizedBox(height: 32),
+            _buildSettingsTile(
+              context,
+              icon: Icons.share_outlined,
+              title: 'Mời bạn bè sử dụng',
+              subtitle: 'Chia sẻ vBook',
+              onTap: () => _copyShareInvite(context),
+            ),
+            const SizedBox(height: 24),
             Center(
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Text('Phiên bản: 1.1.56', style: TextStyle(color: isDark ? Colors.grey.shade500 : Colors.grey.shade600)),
-                  const SizedBox(width: 8),
-                  Icon(Icons.refresh, size: 16, color: isDark ? Colors.grey.shade500 : Colors.grey.shade600),
-                ],
+              child: Text(
+                'Phiên bản 1.1.0',
+                style: TextStyle(
+                  color: colorScheme.onSurfaceVariant,
+                  fontSize: 13,
+                ),
               ),
             ),
             const SizedBox(height: 32),
           ],
         ),
+      ),
+    );
+  }
+
+  String _syncStatusText(UserProvider userProvider) {
+    if (userProvider.isLoggedIn && !FirebaseBackendService.isInitialized) {
+      return '${userProvider.email} - lưu trên thiết bị';
+    }
+    if (!FirebaseBackendService.isConfigured) {
+      return 'Sẵn sàng đăng ký trên thiết bị';
+    }
+    if (!FirebaseBackendService.isInitialized) {
+      return 'Sẵn sàng đăng ký trên thiết bị';
+    }
+    if (userProvider.isLoggedIn) {
+      return userProvider.email;
+    }
+    return 'Sẵn sàng đăng nhập và đồng bộ';
+  }
+
+  Widget _buildSyncStatusIcon(BuildContext context, UserProvider userProvider) {
+    final colorScheme = Theme.of(context).colorScheme;
+    final isReady =
+        FirebaseBackendService.isConfigured &&
+        FirebaseBackendService.isInitialized;
+
+    if (userProvider.isLoggedIn) {
+      return Icon(
+        isReady ? Icons.verified_rounded : Icons.check_circle_rounded,
+        color: colorScheme.primary,
+      );
+    }
+    if (isReady) {
+      return Icon(
+        Icons.login_rounded,
+        color: colorScheme.onSurfaceVariant,
+        size: 22,
+      );
+    }
+    return Icon(
+      Icons.cloud_off_rounded,
+      color: colorScheme.onSurfaceVariant,
+      size: 22,
+    );
+  }
+
+  Future<_LibraryStats> _loadLibraryStats() async {
+    final stories = await ApiService.fetchPersonalStories();
+    final storyIds = stories.map((story) => story.id).toSet();
+    final history = (await ApiService.getReadingHistory())
+        .where((marker) => storyIds.contains(marker.storyId))
+        .toList();
+    final lastRead = await ApiService.getLastReadStory();
+
+    return _LibraryStats(
+      stories: stories,
+      history: history,
+      lastRead: lastRead,
+    );
+  }
+
+  Widget _buildLibraryStatsPanel(BuildContext context) {
+    final colorScheme = Theme.of(context).colorScheme;
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+
+    return FutureBuilder<_LibraryStats>(
+      future: _loadLibraryStats(),
+      builder: (context, snapshot) {
+        if (!snapshot.hasData) {
+          return const Padding(
+            padding: EdgeInsets.fromLTRB(20, 16, 20, 16),
+            child: LinearProgressIndicator(minHeight: 2),
+          );
+        }
+
+        final stats = snapshot.data!;
+        return InkWell(
+          onTap: stats.stories.isEmpty
+              ? null
+              : () => _showLibraryStoriesSheet(context, stats.stories),
+          borderRadius: BorderRadius.circular(8),
+          child: Container(
+            margin: const EdgeInsets.fromLTRB(16, 12, 16, 16),
+            padding: const EdgeInsets.all(14),
+            decoration: BoxDecoration(
+              color: isDark ? const Color(0xFF151A18) : colorScheme.surface,
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(
+                color: colorScheme.outline.withValues(alpha: 0.14),
+              ),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Container(
+                      width: 36,
+                      height: 36,
+                      decoration: BoxDecoration(
+                        color: colorScheme.primary.withValues(alpha: 0.12),
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: Icon(
+                        Icons.auto_stories_rounded,
+                        color: colorScheme.primary,
+                        size: 20,
+                      ),
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            'Kệ sách của bạn',
+                            style: TextStyle(
+                              color: colorScheme.onSurface,
+                              fontSize: 16,
+                              fontWeight: FontWeight.w900,
+                            ),
+                          ),
+                          const SizedBox(height: 2),
+                          Text(
+                            stats.lastRead == null
+                                ? 'Chưa có lịch sử đọc gần đây'
+                                : 'Đọc gần nhất: ${stats.lastRead!.title}',
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                              color: colorScheme.onSurfaceVariant,
+                              fontSize: 12,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    if (stats.stories.isNotEmpty)
+                      Icon(
+                        Icons.chevron_right_rounded,
+                        color: colorScheme.onSurfaceVariant,
+                      ),
+                  ],
+                ),
+                const SizedBox(height: 12),
+                Row(
+                  children: [
+                    Expanded(
+                      child: _LibraryStatChip(
+                        label: 'Tổng',
+                        value: '${stats.total}',
+                        icon: Icons.library_books_rounded,
+                        color: colorScheme.primary,
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: _LibraryStatChip(
+                        label: 'Đang đọc',
+                        value: '${stats.reading}',
+                        icon: Icons.timeline_rounded,
+                        color: colorScheme.secondary,
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 8),
+                Row(
+                  children: [
+                    Expanded(
+                      child: _LibraryStatChip(
+                        label: 'Offline',
+                        value: '${stats.offline}',
+                        icon: Icons.download_done_rounded,
+                        color: const Color(0xFF4E8F7E),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: _LibraryStatChip(
+                        label: 'Drive',
+                        value: '${stats.drive}',
+                        icon: Icons.cloud_done_rounded,
+                        color: const Color(0xFF5A7DB8),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 10),
+                Text(
+                  '${stats.historyCount} mục lịch sử đọc được lưu trên thiết bị',
+                  style: TextStyle(
+                    color: colorScheme.onSurfaceVariant,
+                    fontSize: 12,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  void _showLibraryStoriesSheet(BuildContext context, List<Story> stories) {
+    showModalBottomSheet(
+      context: context,
+      showDragHandle: true,
+      isScrollControlled: true,
+      builder: (ctx) {
+        return DraggableScrollableSheet(
+          expand: false,
+          initialChildSize: 0.68,
+          minChildSize: 0.36,
+          maxChildSize: 0.92,
+          builder: (context, scrollController) {
+            return ListView.separated(
+              controller: scrollController,
+              padding: const EdgeInsets.fromLTRB(16, 0, 16, 24),
+              itemCount: stories.length + 1,
+              separatorBuilder: (_, index) =>
+                  index == 0 ? const SizedBox(height: 8) : const Divider(),
+              itemBuilder: (context, index) {
+                if (index == 0) {
+                  return const Text(
+                    'Truyện trong kệ sách',
+                    style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800),
+                  );
+                }
+                final story = stories[index - 1];
+                return ListTile(
+                  contentPadding: EdgeInsets.zero,
+                  leading: Icon(
+                    story.localPath.isNotEmpty
+                        ? Icons.download_done_rounded
+                        : Icons.cloud_queue_rounded,
+                  ),
+                  title: Text(
+                    story.title,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                  subtitle: Text(
+                    story.author.isNotEmpty
+                        ? story.author
+                        : story.fileType.toUpperCase(),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                  trailing: const Icon(Icons.chevron_right_rounded),
+                  onTap: () {
+                    Navigator.pop(ctx);
+                    Navigator.of(context).push(
+                      MaterialPageRoute(
+                        builder: (_) => StoryDetailScreen(story: story),
+                      ),
+                    );
+                  },
+                );
+              },
+            );
+          },
+        );
+      },
+    );
+  }
+
+  Widget _buildSignedInHeader(
+    BuildContext context,
+    UserProvider userProvider,
+    Color textColor,
+  ) {
+    final colorScheme = Theme.of(context).colorScheme;
+
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.fromLTRB(20, 14, 20, 20),
+      child: Row(
+        children: [
+          GestureDetector(
+            onTap: () => _showEditProfileDialog(context),
+            child: CircleAvatar(
+              radius: 40,
+              backgroundColor: userProvider.avatarColor,
+              backgroundImage: _avatarImageProvider(userProvider.avatarUrl),
+              child: _avatarImageProvider(userProvider.avatarUrl) == null
+                  ? Text(
+                      userProvider.initials,
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 24,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    )
+                  : null,
+            ),
+          ),
+          const SizedBox(width: 16),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  userProvider.name,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    fontSize: 20,
+                    fontWeight: FontWeight.bold,
+                    color: textColor,
+                  ),
+                ),
+                const SizedBox(height: 3),
+                Text(
+                  userProvider.email,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    color: colorScheme.onSurfaceVariant,
+                    fontSize: 12,
+                  ),
+                ),
+                const SizedBox(height: 6),
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 8,
+                    vertical: 3,
+                  ),
+                  decoration: BoxDecoration(
+                    border: Border.all(
+                      color: userProvider.isAdmin
+                          ? colorScheme.secondary
+                          : colorScheme.primary,
+                    ),
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: Text(
+                    userProvider.isAdmin ? 'Quản trị viên' : 'Thành viên',
+                    style: TextStyle(
+                      color: userProvider.isAdmin
+                          ? colorScheme.secondary
+                          : colorScheme.primary,
+                      fontSize: 11,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          IconButton(
+            onPressed: () => _showEditProfileDialog(context),
+            icon: Icon(
+              Icons.edit_outlined,
+              color: colorScheme.onSurfaceVariant,
+            ),
+            tooltip: 'Chỉnh sửa',
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildGuestHeader(BuildContext context, bool isDark, Color textColor) {
+    final colorScheme = Theme.of(context).colorScheme;
+
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.fromLTRB(20, 14, 20, 20),
+      child: Row(
+        children: [
+          CircleAvatar(
+            radius: 40,
+            backgroundColor: isDark
+                ? Colors.grey.shade800
+                : Colors.grey.shade300,
+            child: Icon(
+              Icons.person,
+              size: 50,
+              color: isDark ? Colors.grey.shade500 : Colors.grey.shade400,
+            ),
+          ),
+          const SizedBox(width: 16),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'Khách',
+                  style: TextStyle(
+                    fontSize: 20,
+                    fontWeight: FontWeight.bold,
+                    color: textColor,
+                  ),
+                ),
+                const SizedBox(height: 8),
+                FilledButton.icon(
+                  onPressed: () => _showLoginDialog(context),
+                  icon: const Icon(Icons.login_rounded, size: 18),
+                  label: const Text('Đăng nhập'),
+                  style: FilledButton.styleFrom(
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 20,
+                      vertical: 8,
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  'Đồng bộ thư viện và cộng đồng',
+                  style: TextStyle(
+                    color: colorScheme.onSurfaceVariant,
+                    fontSize: 12,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -168,17 +1520,408 @@ class ProfileScreen extends StatelessWidget {
       color: bgColor,
       child: Text(
         title,
-        style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: textColor),
+        style: TextStyle(
+          fontSize: 12,
+          fontWeight: FontWeight.bold,
+          color: textColor.withValues(alpha: 0.62),
+        ),
       ),
     );
   }
 
-  Widget _buildListTile(IconData icon, String title, bool isDark) {
+  Widget _buildThemeTile(
+    BuildContext context,
+    bool isDark,
+    ThemeProvider themeProvider,
+  ) {
     return ListTile(
-      contentPadding: const EdgeInsets.symmetric(horizontal: 24, vertical: 4),
-      leading: Icon(icon, color: isDark ? Colors.white70 : Colors.black87),
-      title: Text(title, style: TextStyle(fontSize: 16, color: isDark ? Colors.white : Colors.black87)),
-      onTap: () {},
+      contentPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 2),
+      leading: Icon(isDark ? Icons.dark_mode : Icons.light_mode),
+      title: const Text(
+        'Giao diện',
+        style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600),
+      ),
+      subtitle: Text(isDark ? 'Tối' : 'Sáng'),
+      trailing: Switch(
+        value: isDark,
+        onChanged: (_) => themeProvider.toggleTheme(),
+      ),
+    );
+  }
+
+  Widget _buildAdminSection(
+    BuildContext context,
+    Color sectionBgColor,
+    Color textColor,
+  ) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        _buildSectionHeader('Quản trị', sectionBgColor, textColor),
+        _buildSettingsTile(
+          context,
+          icon: Icons.add_link_rounded,
+          title: 'Quét thư mục Drive',
+          subtitle: 'Thêm link Drive và làm mới danh sách Khám phá',
+          onTap: () {
+            Navigator.of(
+              context,
+            ).push(MaterialPageRoute(builder: (_) => const ExploreScreen()));
+          },
+        ),
+        _buildSettingsTile(
+          context,
+          icon: Icons.forum_outlined,
+          title: 'Kiểm tra cộng đồng',
+          subtitle: 'Đọc, gửi và xóa tin nhắn vi phạm bằng tài khoản admin',
+          onTap: () {
+            Navigator.of(
+              context,
+            ).push(MaterialPageRoute(builder: (_) => const CommunityScreen()));
+          },
+        ),
+        _buildSettingsTile(
+          context,
+          icon: Icons.verified_user_outlined,
+          title: 'Làm mới quyền admin',
+          subtitle: 'Cập nhật role từ phiên đăng nhập hiện tại',
+          onTap: () async {
+            await context.read<UserProvider>().refreshSession();
+            if (!context.mounted) return;
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(content: Text('Đã làm mới quyền tài khoản.')),
+            );
+          },
+        ),
+      ],
+    );
+  }
+
+  Widget _buildSettingsTile(
+    BuildContext context, {
+    required IconData icon,
+    required String title,
+    required String subtitle,
+    VoidCallback? onTap,
+    Widget? trailing,
+  }) {
+    return ListTile(
+      contentPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 2),
+      onTap: onTap,
+      leading: Icon(icon),
+      title: Text(
+        title,
+        style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w600),
+      ),
+      subtitle: Text(subtitle, maxLines: 1, overflow: TextOverflow.ellipsis),
+      trailing:
+          trailing ??
+          (onTap == null
+              ? null
+              : Icon(
+                  Icons.chevron_right,
+                  size: 20,
+                  color: Theme.of(context).colorScheme.onSurfaceVariant,
+                )),
+    );
+  }
+
+  Widget _buildAudioSection(
+    BuildContext context,
+    ReadingSettingsProvider settings,
+    Color sectionBgColor,
+  ) {
+    final colorScheme = Theme.of(context).colorScheme;
+    final rateLabel = '${(settings.ttsRate * 100).round()}%';
+    final pitchLabel = settings.ttsPitch.toStringAsFixed(1);
+    final volumeLabel = '${(settings.ttsVolume * 100).round()}%';
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        _buildSectionHeader(
+          'Audio đọc truyện',
+          sectionBgColor,
+          colorScheme.onSurface,
+        ),
+        ListTile(
+          contentPadding: const EdgeInsets.symmetric(
+            horizontal: 20,
+            vertical: 2,
+          ),
+          leading: const Icon(Icons.graphic_eq_rounded),
+          title: const Text(
+            'Tự chuyển chương',
+            style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600),
+          ),
+          subtitle: const Text('Khi nghe hết chương hiện tại'),
+          trailing: Switch(
+            value: settings.audioAutoNext,
+            onChanged: settings.setAudioAutoNext,
+          ),
+        ),
+        _buildAudioSlider(
+          context,
+          icon: Icons.speed_rounded,
+          title: 'Tốc độ',
+          valueLabel: rateLabel,
+          value: settings.ttsRate,
+          min: 0.25,
+          max: 0.85,
+          divisions: 12,
+          onChanged: settings.setTtsRate,
+        ),
+        _buildAudioSlider(
+          context,
+          icon: Icons.record_voice_over_rounded,
+          title: 'Cao độ',
+          valueLabel: pitchLabel,
+          value: settings.ttsPitch,
+          min: 0.7,
+          max: 1.3,
+          divisions: 12,
+          onChanged: settings.setTtsPitch,
+        ),
+        _buildAudioSlider(
+          context,
+          icon: Icons.volume_up_rounded,
+          title: 'Âm lượng',
+          valueLabel: volumeLabel,
+          value: settings.ttsVolume,
+          min: 0.2,
+          max: 1.0,
+          divisions: 8,
+          onChanged: settings.setTtsVolume,
+        ),
+      ],
+    );
+  }
+
+  Widget _buildAudioSlider(
+    BuildContext context, {
+    required IconData icon,
+    required String title,
+    required String valueLabel,
+    required double value,
+    required double min,
+    required double max,
+    required int divisions,
+    required ValueChanged<double> onChanged,
+  }) {
+    final colorScheme = Theme.of(context).colorScheme;
+
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(20, 4, 20, 10),
+      child: Row(
+        children: [
+          Icon(icon, color: colorScheme.onSurfaceVariant),
+          const SizedBox(width: 16),
+          SizedBox(
+            width: 76,
+            child: Text(
+              title,
+              style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w600),
+            ),
+          ),
+          Expanded(
+            child: Slider(
+              value: value,
+              min: min,
+              max: max,
+              divisions: divisions,
+              label: valueLabel,
+              onChanged: onChanged,
+            ),
+          ),
+          SizedBox(
+            width: 44,
+            child: Text(
+              valueLabel,
+              textAlign: TextAlign.right,
+              style: TextStyle(
+                color: colorScheme.onSurfaceVariant,
+                fontSize: 12,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _LibraryStats {
+  final List<Story> stories;
+  final List<ReadingMarker> history;
+  final Story? lastRead;
+
+  const _LibraryStats({
+    required this.stories,
+    required this.history,
+    required this.lastRead,
+  });
+
+  int get total => stories.length;
+
+  int get reading =>
+      stories.where((story) => story.savedChapterIndex > 0).length;
+
+  int get offline =>
+      stories.where((story) => story.localPath.isNotEmpty).length;
+
+  int get drive => stories.where((story) => story.isFromDrive).length;
+
+  int get historyCount => history.length;
+}
+
+class _LibraryStatChip extends StatelessWidget {
+  final String label;
+  final String value;
+  final IconData icon;
+  final Color color;
+
+  const _LibraryStatChip({
+    required this.label,
+    required this.value,
+    required this.icon,
+    required this.color,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final colorScheme = Theme.of(context).colorScheme;
+
+    return Container(
+      height: 62,
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.08),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: color.withValues(alpha: 0.16)),
+      ),
+      child: Row(
+        children: [
+          Icon(icon, color: color, size: 19),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  value,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    color: color,
+                    fontSize: 17,
+                    fontWeight: FontWeight.w900,
+                    height: 1,
+                  ),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  label,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    color: colorScheme.onSurfaceVariant,
+                    fontSize: 11,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _StorageInfoRow extends StatelessWidget {
+  final IconData icon;
+  final String title;
+  final String value;
+  final Color color;
+
+  const _StorageInfoRow({
+    required this.icon,
+    required this.title,
+    required this.value,
+    required this.color,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final colorScheme = Theme.of(context).colorScheme;
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 7),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(icon, color: color, size: 22),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  title,
+                  style: TextStyle(
+                    color: colorScheme.onSurface,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  value,
+                  style: TextStyle(
+                    color: colorScheme.onSurfaceVariant,
+                    fontSize: 13,
+                    height: 1.3,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _AvatarSlider extends StatelessWidget {
+  final String label;
+  final double value;
+  final double min;
+  final double max;
+  final ValueChanged<double> onChanged;
+
+  const _AvatarSlider({
+    required this.label,
+    required this.value,
+    required this.min,
+    required this.max,
+    required this.onChanged,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      children: [
+        SizedBox(
+          width: 72,
+          child: Text(
+            label,
+            style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
+          ),
+        ),
+        Expanded(
+          child: Slider(value: value, min: min, max: max, onChanged: onChanged),
+        ),
+      ],
     );
   }
 }

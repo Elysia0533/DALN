@@ -31,7 +31,16 @@ migrate_working_dir/
 .pub-cache/
 .pub/
 /build/
+/android/build/
 /coverage/
+
+# Symbolication related
+app.*.symbols
+
+# Obfuscation related
+app.*.map.json
+
+# Android Studio will place build artifacts here
 
 # Symbolication related
 app.*.symbols
@@ -42,4 +51,19 @@ app.*.map.json
 # Android Studio will place build artifacts here
 /android/app/debug
 /android/app/profile
-/android/app/release
+# Environment variables & secrets
+.env*
+*.env
+env.json
+
+# IDE & Temporary build/scratch files
+.vs/
+.vscode/
+/apkvbook/
+/scratch/
+/test_extensions/
+/test_plugin_extracted/
+/test_plugin_inspect/
+/vbook_kotlin_test/
+*.zip
+*.apk
