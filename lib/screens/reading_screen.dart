@@ -8,6 +8,8 @@ import '../models/reading_marker.dart';
 import '../services/api_service.dart';
 import '../theme/reading_settings_provider.dart';
 import '../widgets/reader_selectable_text.dart';
+import '../widgets/tts_control_sheet.dart';
+import '../services/tts_service.dart';
 
 class ReadingScreen extends StatefulWidget {
   final Story story;
@@ -326,7 +328,7 @@ class _ReadingScreenState extends State<ReadingScreen> {
   }
 
   Future<void> _speakSelection(String selectedText) async {
-    await _speakText(selectedText);
+    await TtsService.instance.speak(selectedText);
   }
 
   void _showSelectionSearch(String selectedText) {
@@ -432,7 +434,7 @@ class _ReadingScreenState extends State<ReadingScreen> {
         _showSettings();
         break;
       case 'audio':
-        _toggleTts();
+        TtsControlSheet.show(context, textContent: _currentContent);
         break;
     }
   }

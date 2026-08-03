@@ -29,13 +29,18 @@ class TtsControlSheet extends StatelessWidget {
     final tts = TtsService.instance;
     final ambient = AmbientAudioService.instance;
     final theme = Theme.of(context);
+    final colorScheme = theme.colorScheme;
 
     return AnimatedBuilder(
       animation: Listenable.merge([tts, ambient]),
       builder: (context, child) {
+        final totalChunks = tts.totalChunks;
+        final currentChunk = tts.currentChunkIndex + 1;
+        final progressPct = totalChunks > 0 ? (currentChunk / totalChunks * 100).toInt() : 0;
+
         return Container(
           decoration: BoxDecoration(
-            color: theme.colorScheme.surface,
+            color: colorScheme.surface,
             borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
             boxShadow: [
               BoxShadow(
@@ -70,11 +75,11 @@ class TtsControlSheet extends StatelessWidget {
                   Expanded(
                     child: Row(
                       children: [
-                        Icon(Icons.record_voice_over, color: theme.colorScheme.primary),
+                        Icon(Icons.record_voice_over, color: colorScheme.primary),
                         const SizedBox(width: 8),
                         Flexible(
                           child: Text(
-                            'Đọc truyện tự động (TTS)',
+                            'Đọc truyện bằng giọng nói (TTS)',
                             style: theme.textTheme.titleMedium?.copyWith(
                               fontWeight: FontWeight.bold,
                             ),
@@ -88,35 +93,62 @@ class TtsControlSheet extends StatelessWidget {
                     Chip(
                       avatar: const Icon(Icons.timer, size: 16),
                       label: Text('${tts.timerMinutesRemaining}m'),
-                      backgroundColor: theme.colorScheme.primaryContainer,
+                      backgroundColor: colorScheme.primaryContainer,
                     ),
                   if (tts.stopAtEndOfChapter)
                     Chip(
                       avatar: const Icon(Icons.check_circle_outline, size: 16),
                       label: const Text('Hết chương'),
-                      backgroundColor: theme.colorScheme.secondaryContainer,
+                      backgroundColor: colorScheme.secondaryContainer,
                     ),
                 ],
               ),
+
+              if (totalChunks > 0) ...[
+                const SizedBox(height: 12),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Text(
+                      'Tiến trình đọc: Đoạn $currentChunk/$totalChunks ($progressPct%)',
+                      style: TextStyle(fontSize: 12, color: colorScheme.onSurfaceVariant, fontWeight: FontWeight.w600),
+                    ),
+                    if (onNextChapter != null)
+                      Text(
+                        'Tự động qua chương mới',
+                        style: TextStyle(fontSize: 11, color: colorScheme.primary, fontStyle: FontStyle.italic),
+                      ),
+                  ],
+                ),
+                const SizedBox(height: 6),
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(4),
+                  child: LinearProgressIndicator(
+                    value: totalChunks > 0 ? (currentChunk / totalChunks) : 0,
+                    minHeight: 6,
+                    color: colorScheme.primary,
+                    backgroundColor: colorScheme.primaryContainer.withAlpha(100),
+                  ),
+                ),
+              ],
+
               const SizedBox(height: 20),
 
-              // Media Control Buttons Bar
+              // Media Control Buttons Bar (Prev Chunk, Play/Pause, Next Chunk, Stop)
               Row(
                 mainAxisAlignment: MainAxisAlignment.spaceEvenly,
                 children: [
                   IconButton.filledTonal(
-                    onPressed: () {
-                      tts.setSpeechRate((tts.speechRate - 0.1).clamp(0.2, 1.0));
-                    },
-                    icon: const Icon(Icons.remove),
-                    tooltip: 'Giảm tốc độ',
+                    onPressed: tts.currentChunkIndex > 0 ? () => tts.previousChunk() : null,
+                    icon: const Icon(Icons.skip_previous_rounded),
+                    tooltip: 'Đoạn trước',
                   ),
                   FloatingActionButton.large(
                     heroTag: 'tts_main_play_btn',
                     onPressed: () {
                       if (tts.isPlaying) {
                         tts.pause();
-                      } else if (tts.state == TtsState.paused) {
+                      } else if (tts.isPaused) {
                         tts.resume();
                       } else {
                         tts.speak(textContent, onChapterComplete: onNextChapter);
@@ -128,11 +160,9 @@ class TtsControlSheet extends StatelessWidget {
                     ),
                   ),
                   IconButton.filledTonal(
-                    onPressed: () {
-                      tts.setSpeechRate((tts.speechRate + 0.1).clamp(0.2, 1.0));
-                    },
-                    icon: const Icon(Icons.add),
-                    tooltip: 'Tăng tốc độ',
+                    onPressed: tts.currentChunkIndex < totalChunks - 1 ? () => tts.nextChunk() : null,
+                    icon: const Icon(Icons.skip_next_rounded),
+                    tooltip: 'Đoạn sau',
                   ),
                   IconButton.filledTonal(
                     onPressed: () => tts.stop(),
@@ -193,7 +223,7 @@ class TtsControlSheet extends StatelessWidget {
               // Ambient Sound Selection (Nhạc nền đọc truyện)
               Row(
                 children: [
-                  Icon(Icons.music_note, color: theme.colorScheme.secondary),
+                  Icon(Icons.music_note, color: colorScheme.secondary),
                   const SizedBox(width: 8),
                   Text(
                     'Nhạc nền thư giãn:',
