@@ -112,27 +112,7 @@ class _SourceBrowseScreenState extends State<SourceBrowseScreen> {
       effectiveDirPath = result;
     }
 
-    // ── Diagnostic: list files in plugin dir ──
     print('[SourceBrowse] Loading engine with path: $effectiveDirPath');
-    final diagDir = Directory(effectiveDirPath);
-    if (await diagDir.exists()) {
-      try {
-        final allFiles = await diagDir.list(recursive: true).toList();
-        print('[SourceBrowse] Files in $effectiveDirPath (${allFiles.length} total):');
-        for (final f in allFiles) {
-          if (f is File) {
-            final stat = await f.stat();
-            print('  FILE: ${f.path} (${stat.size} bytes)');
-          } else if (f is Directory) {
-            print('  DIR:  ${f.path}/');
-          }
-        }
-      } catch (e) {
-        print('[SourceBrowse] Error listing files: $e');
-      }
-    } else {
-      print('[SourceBrowse] WARNING: effectiveDirPath does NOT exist: $effectiveDirPath');
-    }
 
     final success = await VBookEngineChannel.loadSource(plugin.id.hashCode, effectiveDirPath);
     if (!success) {

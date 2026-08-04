@@ -9,6 +9,7 @@ class TtsService extends ChangeNotifier {
   factory TtsService() => instance;
 
   final FlutterTts _flutterTts = FlutterTts();
+  final Completer<void> _initCompleter = Completer<void>();
 
   TtsState _state = TtsState.stopped;
   TtsState get state => _state;
@@ -42,7 +43,6 @@ class TtsService extends ChangeNotifier {
   // Chunking and Queue Management
   List<String> _chunks = [];
   int _currentChunkIndex = 0;
-  String _rawText = '';
 
   int get currentChunkIndex => _currentChunkIndex;
   int get totalChunks => _chunks.length;
@@ -58,7 +58,7 @@ class TtsService extends ChangeNotifier {
 
   Future<void> _initTts() async {
     try {
-      await _flutterTts.awaitSpeakCompletion(false);
+      await _flutterTts.awaitSpeakCompletion(true);
       await _configureLanguage();
       await _flutterTts.setSpeechRate(_speechRate);
       await _flutterTts.setPitch(_pitch);
@@ -75,7 +75,7 @@ class TtsService extends ChangeNotifier {
         if (_currentChunkIndex < _chunks.length - 1) {
           _currentChunkIndex++;
           notifyListeners();
-          await _flutterTts.speak(_chunks[_currentChunkIndex]);
+          await _safeSpeak(_chunks[_currentChunkIndex]);
         } else {
           // Reached end of current chapter / text
           _state = TtsState.stopped;
@@ -112,6 +112,10 @@ class TtsService extends ChangeNotifier {
       }
     } catch (e) {
       debugPrint('[TtsService] Exception during initialization: $e');
+    } finally {
+      if (!_initCompleter.isCompleted) {
+        _initCompleter.complete();
+      }
     }
   }
 
@@ -137,9 +141,26 @@ class TtsService extends ChangeNotifier {
     }
   }
 
+  Future<void> _safeSpeak(String text) async {
+    if (!_initCompleter.isCompleted) {
+      await _initCompleter.future;
+    }
+    try {
+      final result = await _flutterTts.speak(text);
+      if (result == 0) {
+        // Android TTS Engine binding retry
+        await Future.delayed(const Duration(milliseconds: 250));
+        await _flutterTts.speak(text);
+      }
+    } catch (e) {
+      debugPrint('[TtsService] speak error, retrying init: $e');
+      await _configureLanguage();
+      await _flutterTts.speak(text);
+    }
+  }
+
   /// Split long story content into sentence-bounded chunks (max 2000 chars)
   List<String> _splitTextIntoChunks(String text) {
-    // Clean up excessive whitespace
     final cleaned = text.replaceAll(RegExp(r'\s+'), ' ').trim();
     if (cleaned.isEmpty) return [];
 
@@ -149,12 +170,10 @@ class TtsService extends ChangeNotifier {
     while (start < cleaned.length) {
       int end = (start + _maxChunkLength).clamp(0, cleaned.length);
       if (end < cleaned.length) {
-        // Try to break at sentence end (. ! ? \n)
         int boundary = cleaned.lastIndexOf(RegExp(r'[.!?。！？]\s'), end);
         if (boundary > start + 200) {
           end = boundary + 1;
         } else {
-          // Fallback to space
           int space = cleaned.lastIndexOf(' ', end);
           if (space > start + 200) {
             end = space;
@@ -175,7 +194,6 @@ class TtsService extends ChangeNotifier {
   Future<void> speak(String text, {VoidCallback? onChapterComplete}) async {
     if (text.trim().isEmpty) return;
 
-    _rawText = text;
     _onChapterComplete = onChapterComplete;
     _chunks = _splitTextIntoChunks(text);
     _currentChunkIndex = 0;
@@ -191,7 +209,7 @@ class TtsService extends ChangeNotifier {
     _state = TtsState.playing;
     notifyListeners();
 
-    await _flutterTts.speak(_chunks[_currentChunkIndex]);
+    await _safeSpeak(_chunks[_currentChunkIndex]);
   }
 
   Future<void> pause() async {
@@ -204,7 +222,7 @@ class TtsService extends ChangeNotifier {
     if (_state == TtsState.paused && _chunks.isNotEmpty) {
       _state = TtsState.playing;
       notifyListeners();
-      await _flutterTts.speak(_chunks[_currentChunkIndex]);
+      await _safeSpeak(_chunks[_currentChunkIndex]);
     }
   }
 
@@ -221,7 +239,7 @@ class TtsService extends ChangeNotifier {
       _currentChunkIndex++;
       _state = TtsState.playing;
       notifyListeners();
-      await _flutterTts.speak(_chunks[_currentChunkIndex]);
+      await _safeSpeak(_chunks[_currentChunkIndex]);
     } else if (_onChapterComplete != null) {
       _onChapterComplete?.call();
     }
@@ -233,7 +251,7 @@ class TtsService extends ChangeNotifier {
       _currentChunkIndex--;
       _state = TtsState.playing;
       notifyListeners();
-      await _flutterTts.speak(_chunks[_currentChunkIndex]);
+      await _safeSpeak(_chunks[_currentChunkIndex]);
     }
   }
 

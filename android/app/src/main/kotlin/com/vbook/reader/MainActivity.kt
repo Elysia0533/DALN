@@ -68,27 +68,7 @@ class MainActivity : FlutterActivity() {
                             
                             // ── Diagnostic: list all files in the plugin directory ──
                             logcat(LogPriority.INFO) { "[MainActivity] loadSource: loading from $dirPath with id=$id" }
-                            fun listFilesRecursive(f: File, prefix: String = ""): String {
-                                val sb = StringBuilder()
-                                if (f.isFile) {
-                                    sb.appendLine("$prefix${f.name} (${f.length()} bytes)")
-                                } else if (f.isDirectory) {
-                                    sb.appendLine("$prefix${f.name}/")
-                                    f.listFiles()?.sortedBy { it.name }?.forEach { child ->
-                                        sb.append(listFilesRecursive(child, "$prefix  "))
-                                    }
-                                }
-                                return sb.toString()
-                            }
-                            val fileTree = listFilesRecursive(dir)
-                            logcat(LogPriority.INFO) { "[MainActivity] loadSource: files in $dirPath:\n$fileTree" }
-                            
-                            // Check for plugin.json or nested plugin.json
-                            val pluginJsonDirect = File(dir, "plugin.json")
-                            logcat(LogPriority.INFO) { "[MainActivity] plugin.json exists=${pluginJsonDirect.exists()} at ${pluginJsonDirect.absolutePath}" }
-                            if (pluginJsonDirect.exists()) {
-                                logcat(LogPriority.INFO) { "[MainActivity] plugin.json content (first 500): ${pluginJsonDirect.readText().take(500)}" }
-                            }
+
                             
                             // Use the proper JsLoader which handles plugin.json, nested dirs, script loading
                             val extensionInfo = JsLoader.loadExtension(this@MainActivity, dir, client)

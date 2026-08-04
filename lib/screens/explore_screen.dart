@@ -502,30 +502,36 @@ class _ExploreScreenState extends State<ExploreScreen> {
           ? const AppLoadingState(message: 'Đang tải danh sách truyện...')
           : _loadError != null && _serverStories.isEmpty
           ? _buildLoadErrorState()
-          : Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                _buildSourceDashboard(
-                  isDark: isDark,
-                  accentColor: accentColor,
-                  isAdmin: userProvider.isAdmin,
-                ),
-                _buildOnlineSourceSection(isDark: isDark, accentColor: accentColor),
-                if (_allGenres.length > 1)
-                  _GenreChipBar(
-                    genres: _allGenres,
-                    selectedGenres: _selectedGenres,
-                    accentColor: accentColor,
+          : CustomScrollView(
+              physics: const BouncingScrollPhysics(),
+              slivers: [
+                SliverToBoxAdapter(
+                  child: _buildSourceDashboard(
                     isDark: isDark,
-                    onSelect: _toggleGenre,
+                    accentColor: accentColor,
+                    isAdmin: userProvider.isAdmin,
                   ),
-
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
-                  child: _buildResultHeader(isDark, accentColor),
                 ),
-
-                Expanded(child: _buildStoryGrid(isDark)),
+                SliverToBoxAdapter(
+                  child: _buildOnlineSourceSection(isDark: isDark, accentColor: accentColor),
+                ),
+                if (_allGenres.length > 1)
+                  SliverToBoxAdapter(
+                    child: _GenreChipBar(
+                      genres: _allGenres,
+                      selectedGenres: _selectedGenres,
+                      accentColor: accentColor,
+                      isDark: isDark,
+                      onSelect: _toggleGenre,
+                    ),
+                  ),
+                SliverToBoxAdapter(
+                  child: Padding(
+                    padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
+                    child: _buildResultHeader(isDark, accentColor),
+                  ),
+                ),
+                _buildSliverStoryGrid(isDark),
               ],
             ),
     );
@@ -942,32 +948,39 @@ class _ExploreScreenState extends State<ExploreScreen> {
     );
   }
 
-  Widget _buildStoryGrid(bool isDark) {
+  Widget _buildSliverStoryGrid(bool isDark) {
     final stories = _displayStories;
 
     if (stories.isEmpty) {
-      return AppEmptyState(
-        icon: Icons.search_off_rounded,
-        title: 'Không tìm thấy truyện',
-        message: _searchQuery.isNotEmpty
-            ? 'Thử tìm bằng tên truyện, tác giả hoặc bỏ bớt bộ lọc.'
-            : 'Thể loại này hiện chưa có truyện trong danh sách.',
+      return SliverFillRemaining(
+        hasScrollBody: false,
+        child: AppEmptyState(
+          icon: Icons.search_off_rounded,
+          title: 'Không tìm thấy truyện',
+          message: _searchQuery.isNotEmpty
+              ? 'Thử tìm bằng tên truyện, tác giả hoặc bỏ bớt bộ lọc.'
+              : 'Thể loại này hiện chưa có truyện trong danh sách.',
+        ),
       );
     }
 
-    return GridView.builder(
+    return SliverPadding(
       padding: const EdgeInsets.fromLTRB(16, 4, 16, 24),
-      gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-        crossAxisCount: 3,
-        childAspectRatio: 0.50,
-        crossAxisSpacing: 12,
-        mainAxisSpacing: 16,
+      sliver: SliverGrid(
+        gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+          crossAxisCount: 3,
+          childAspectRatio: 0.50,
+          crossAxisSpacing: 12,
+          mainAxisSpacing: 16,
+        ),
+        delegate: SliverChildBuilderDelegate(
+          (context, index) {
+            final story = stories[index];
+            return _StoryCard(story: story, isDark: isDark);
+          },
+          childCount: stories.length,
+        ),
       ),
-      itemCount: stories.length,
-      itemBuilder: (context, index) {
-        final story = stories[index];
-        return _StoryCard(story: story, isDark: isDark);
-      },
     );
   }
 }
