@@ -17,8 +17,10 @@ class PluginLoader {
 
       final zipFile = File(p.join(pluginsDir.path, '$pluginId.zip'));
 
-      print('Downloading plugin from: $url (ID: $pluginId)');
-      final res = await http.get(Uri.parse(url)).timeout(const Duration(seconds: 30));
+      print('Downloading plugin ID: $pluginId');
+      final res = await http
+          .get(Uri.parse(url))
+          .timeout(const Duration(seconds: 30));
       if (res.statusCode == 200) {
         await zipFile.writeAsBytes(res.bodyBytes);
 
@@ -32,7 +34,9 @@ class PluginLoader {
           return result['dirPath'] as String;
         }
       } else {
-        print('HTTP download error: ${res.statusCode} for $url');
+        print(
+          'HTTP download error: ${res.statusCode} for plugin ID: $pluginId',
+        );
       }
     } catch (e) {
       print('installPlugin error: $e');
@@ -67,7 +71,10 @@ class PluginLoader {
   }
 
   /// Extracts a local zip file and returns the target directory path and raw plugin.json map.
-  static Future<Map<String, dynamic>?> extractZipFile(File zipFile, {String? customId}) async {
+  static Future<Map<String, dynamic>?> extractZipFile(
+    File zipFile, {
+    String? customId,
+  }) async {
     try {
       final bytes = await zipFile.readAsBytes();
       final archive = ZipDecoder().decodeBytes(bytes);
@@ -77,7 +84,10 @@ class PluginLoader {
       for (final file in archive) {
         if (file.name.endsWith('plugin.json')) {
           jsonFile = file;
-          prefix = file.name.substring(0, file.name.length - 'plugin.json'.length);
+          prefix = file.name.substring(
+            0,
+            file.name.length - 'plugin.json'.length,
+          );
           break;
         }
       }
@@ -90,7 +100,11 @@ class PluginLoader {
         pluginJsonMap = jsonDecode(cleaned) as Map<String, dynamic>;
       }
 
-      final pluginId = customId ?? (pluginJsonMap?['id']?.toString() ?? pluginJsonMap?['metadata']?['id']?.toString() ?? 'plugin_${DateTime.now().millisecondsSinceEpoch}');
+      final pluginId =
+          customId ??
+          (pluginJsonMap?['id']?.toString() ??
+              pluginJsonMap?['metadata']?['id']?.toString() ??
+              'plugin_${DateTime.now().millisecondsSinceEpoch}');
 
       final docDir = await getApplicationDocumentsDirectory();
       final pluginsDir = Directory(p.join(docDir.path, 'vbook_plugins'));

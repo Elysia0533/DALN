@@ -2,6 +2,11 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 typedef ReaderTextAction = void Function(String selectedText);
+typedef ReaderSelectionAction = void Function(
+  String selectedText,
+  int selectionStart,
+  int selectionEnd,
+);
 
 class ReaderSelectableText extends StatelessWidget {
   final String text;
@@ -9,6 +14,7 @@ class ReaderSelectableText extends StatelessWidget {
   final TextAlign? textAlign;
   final ReaderTextAction? onNote;
   final ReaderTextAction? onSpeak;
+  final ReaderSelectionAction? onSelectionSpeak;
   final ReaderTextAction? onSearch;
   final ReaderTextAction? onSettings;
   final ReaderTextAction? onShare;
@@ -20,6 +26,7 @@ class ReaderSelectableText extends StatelessWidget {
     this.textAlign,
     this.onNote,
     this.onSpeak,
+    this.onSelectionSpeak,
     this.onSearch,
     this.onSettings,
     this.onShare,
@@ -32,12 +39,20 @@ class ReaderSelectableText extends StatelessWidget {
       style: style,
       textAlign: textAlign,
       contextMenuBuilder: (context, editableTextState) {
-        final selectedText = _selectedText(editableTextState);
+        final value = editableTextState.textEditingValue;
+        final selection = value.selection;
+        final selectedText = (selection.isValid && !selection.isCollapsed)
+            ? selection.textInside(value.text).trim()
+            : '';
+
         if (selectedText.isEmpty) {
           return AdaptiveTextSelectionToolbar.editableText(
             editableTextState: editableTextState,
           );
         }
+
+        final start = selection.start;
+        final end = selection.end;
 
         return AdaptiveTextSelectionToolbar.buttonItems(
           anchors: editableTextState.contextMenuAnchors,
@@ -58,12 +73,16 @@ class ReaderSelectableText extends StatelessWidget {
                   onNote!(selectedText);
                 },
               ),
-            if (onSpeak != null)
+            if (onSelectionSpeak != null || onSpeak != null)
               ContextMenuButtonItem(
                 label: 'Đọc',
                 onPressed: () {
                   editableTextState.hideToolbar(false);
-                  onSpeak!(selectedText);
+                  if (onSelectionSpeak != null) {
+                    onSelectionSpeak!(selectedText, start, end);
+                  } else if (onSpeak != null) {
+                    onSpeak!(selectedText);
+                  }
                 },
               ),
             if (onSearch != null)
@@ -94,13 +113,6 @@ class ReaderSelectableText extends StatelessWidget {
         );
       },
     );
-  }
-
-  static String _selectedText(EditableTextState state) {
-    final value = state.textEditingValue;
-    final selection = value.selection;
-    if (!selection.isValid || selection.isCollapsed) return '';
-    return selection.textInside(value.text).trim();
   }
 
   static void _showSnack(BuildContext context, String message) {

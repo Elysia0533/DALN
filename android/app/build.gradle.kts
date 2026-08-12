@@ -1,9 +1,57 @@
+import java.io.File
+import java.util.Properties
+
 plugins {
     id("com.android.application")
     id("kotlin-android")
     id("org.jetbrains.kotlin.plugin.serialization")
     // The Flutter Gradle Plugin must be applied after the Android and Kotlin Gradle plugins.
     id("dev.flutter.flutter-gradle-plugin")
+}
+
+val releaseSigningTasks = gradle.startParameter.taskNames.any {
+    val taskName = it.lowercase()
+    taskName.contains("release")
+}
+val keystorePropertiesFile = rootProject.file("key.properties")
+val keystoreProperties = Properties()
+if (keystorePropertiesFile.exists()) {
+    keystorePropertiesFile.inputStream().use { keystoreProperties.load(it) }
+}
+
+fun signingValue(propertyName: String, environmentName: String): String {
+    return (keystoreProperties.getProperty(propertyName) ?: System.getenv(environmentName)).orEmpty()
+}
+
+val releaseStoreFile = signingValue("storeFile", "VBOOK_RELEASE_STORE_FILE")
+val releaseStorePassword = signingValue("storePassword", "VBOOK_RELEASE_STORE_PASSWORD")
+val releaseKeyAlias = signingValue("keyAlias", "VBOOK_RELEASE_KEY_ALIAS")
+val releaseKeyPassword = signingValue("keyPassword", "VBOOK_RELEASE_KEY_PASSWORD")
+
+fun releaseStoreFilePath(): File {
+    val configuredFile = File(releaseStoreFile)
+    return if (configuredFile.isAbsolute) configuredFile else rootProject.file(releaseStoreFile)
+}
+
+if (releaseSigningTasks) {
+    val missing = buildList {
+        if (releaseStoreFile.isBlank()) add("storeFile / VBOOK_RELEASE_STORE_FILE")
+        if (releaseStorePassword.isBlank()) add("storePassword / VBOOK_RELEASE_STORE_PASSWORD")
+        if (releaseKeyAlias.isBlank()) add("keyAlias / VBOOK_RELEASE_KEY_ALIAS")
+        if (releaseKeyPassword.isBlank()) add("keyPassword / VBOOK_RELEASE_KEY_PASSWORD")
+    }
+    if (missing.isNotEmpty()) {
+        throw GradleException(
+            "Release signing is not configured. Missing: ${missing.joinToString(", ")}. " +
+                "Create android/key.properties locally or set the VBOOK_RELEASE_* environment variables."
+        )
+    }
+    if (!releaseStoreFilePath().exists()) {
+        throw GradleException(
+            "Release signing keystore was not found at '${releaseStoreFilePath()}'. " +
+                "Update storeFile in android/key.properties or VBOOK_RELEASE_STORE_FILE."
+        )
+    }
 }
 
 android {
@@ -31,11 +79,26 @@ android {
         versionName = flutter.versionName
     }
 
+    signingConfigs {
+        create("release") {
+            if (releaseStoreFile.isNotBlank()) {
+                storeFile = releaseStoreFilePath()
+            }
+            if (releaseStorePassword.isNotBlank()) {
+                storePassword = releaseStorePassword
+            }
+            if (releaseKeyAlias.isNotBlank()) {
+                keyAlias = releaseKeyAlias
+            }
+            if (releaseKeyPassword.isNotBlank()) {
+                keyPassword = releaseKeyPassword
+            }
+        }
+    }
+
     buildTypes {
         release {
-            // TODO: Add your own signing config for the release build.
-            // Signing with the debug keys for now, so `flutter run --release` works.
-            signingConfig = signingConfigs.getByName("debug")
+            signingConfig = signingConfigs.getByName("release")
         }
     }
 }

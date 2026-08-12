@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
-import 'package:flutter_tts/flutter_tts.dart';
 import 'package:flutter/services.dart';
 import 'dart:async';
 import '../models/story.dart';
@@ -9,6 +8,7 @@ import '../services/api_service.dart';
 import '../theme/reading_settings_provider.dart';
 import '../widgets/reader_selectable_text.dart';
 import '../widgets/tts_control_sheet.dart';
+import '../widgets/tts_player_container.dart';
 import '../services/tts_service.dart';
 
 class ReadingScreen extends StatefulWidget {
@@ -36,21 +36,15 @@ class _ReadingScreenState extends State<ReadingScreen> {
   double _scrollProgress = 0.0;
   Timer? _historySaveTimer;
 
-  final FlutterTts _tts = FlutterTts();
-  bool _isSpeaking = false;
-  bool _isPaused = false;
-  List<String> _ttsQueue = const [];
-  int _ttsQueueIndex = 0;
-
-  static const int _ttsChunkMaxLength = 3200;
+  int _lastScrolledParagraphIndex = -1;
 
   @override
   void initState() {
     super.initState();
-    _initTts();
     _restoreScrollPosition();
     _loadBookmarkState();
     _scrollController.addListener(_onScroll);
+    _setupTtsListener();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _recordHistory();
       if (widget.initialScrollOffset != null || widget.initialParagraphIndex != null) {
@@ -62,61 +56,39 @@ class _ReadingScreenState extends State<ReadingScreen> {
     });
   }
 
-  Future<void> _initTts() async {
-    await _configureTtsLanguage();
-    await _tts.awaitSpeakCompletion(false);
-    await _applyTtsSettings();
-    _tts.setCompletionHandler(() async {
-      if (!mounted) return;
-      if (_ttsQueueIndex < _ttsQueue.length - 1) {
-        _ttsQueueIndex++;
-        await _tts.speak(_ttsQueue[_ttsQueueIndex]);
-        return;
-      }
-      if (mounted) {
-        setState(() {
-          _isSpeaking = false;
-          _isPaused = false;
-          _ttsQueue = const [];
-          _ttsQueueIndex = 0;
-        });
-      }
-    });
-    _tts.setErrorHandler((msg) {
-      if (mounted) {
-        setState(() {
-          _isSpeaking = false;
-          _isPaused = false;
-        });
-      }
-    });
+  void _setupTtsListener() {
+    TtsService.instance.addListener(_onTtsStateChange);
   }
 
-  Future<void> _configureTtsLanguage() async {
-    try {
-      final rawLanguages = await _tts.getLanguages;
-      final languages = rawLanguages is Iterable
-          ? rawLanguages.map((item) => item.toString()).toList()
-          : const <String>[];
-      final selected = languages.firstWhere(
-        (language) => language.toLowerCase() == 'vi-vn',
-        orElse: () => languages.firstWhere(
-          (language) => language.toLowerCase().startsWith('vi'),
-          orElse: () => languages.contains('en-US') ? 'en-US' : '',
-        ),
-      );
-      await _tts.setLanguage(selected.isEmpty ? 'vi-VN' : selected);
-    } catch (_) {
-      await _tts.setLanguage('vi-VN');
+  void _onTtsStateChange() {
+    final tts = TtsService.instance;
+    if (!mounted) return;
+
+    if (tts.isPlaying &&
+        tts.currentParagraphIndex != _lastScrolledParagraphIndex) {
+      _lastScrolledParagraphIndex = tts.currentParagraphIndex;
+      _scrollToParagraph(tts.currentParagraphIndex);
     }
   }
 
-  Future<void> _applyTtsSettings() async {
-    final settings = context.read<ReadingSettingsProvider>();
-    await _tts.setSpeechRate(settings.ttsRate);
-    await _tts.setPitch(settings.ttsPitch);
-    await _tts.setVolume(settings.ttsVolume);
+  void _scrollToParagraph(int index) {
+    if (!_scrollController.hasClients) return;
+    final paragraphs = TtsService.parseParagraphs(_currentContent);
+    if (paragraphs.isEmpty) return;
+
+    final maxScroll = _scrollController.position.maxScrollExtent;
+    if (maxScroll <= 0) return;
+
+    final ratio = (index / (paragraphs.length)).clamp(0.0, 1.0);
+    final targetOffset = (ratio * maxScroll).clamp(0.0, maxScroll);
+
+    _scrollController.animateTo(
+      targetOffset,
+      duration: const Duration(milliseconds: 350),
+      curve: Curves.easeInOut,
+    );
   }
+
 
   Future<void> _restoreScrollPosition() async {
     final offset = await ApiService.getScrollOffset(widget.story.id);
@@ -151,73 +123,7 @@ class _ReadingScreenState extends State<ReadingScreen> {
       ? widget.story.contentEng
       : widget.story.content;
 
-  List<String> _splitTtsText(String value) {
-    final text = value.replaceAll(RegExp(r'\s+'), ' ').trim();
-    if (text.isEmpty) return const [];
-    final chunks = <String>[];
-    var start = 0;
-    while (start < text.length) {
-      var end = (start + _ttsChunkMaxLength).clamp(0, text.length).toInt();
-      if (end < text.length) {
-        final boundary = text.lastIndexOf(RegExp(r'[.!?。！？]\s'), end);
-        if (boundary > start + 400) {
-          end = boundary + 1;
-        } else {
-          final space = text.lastIndexOf(' ', end);
-          if (space > start + 400) end = space;
-        }
-      }
-      chunks.add(text.substring(start, end).trim());
-      start = end;
-      while (start < text.length && text[start] == ' ') {
-        start++;
-      }
-    }
-    return chunks.where((chunk) => chunk.isNotEmpty).toList();
-  }
 
-  Future<void> _speakText(String text) async {
-    final chunks = _splitTtsText(text);
-    if (chunks.isEmpty) return;
-    await _applyTtsSettings();
-    await _tts.stop();
-    _ttsQueue = chunks;
-    _ttsQueueIndex = 0;
-    await _tts.speak(chunks.first);
-    if (!mounted) return;
-    setState(() {
-      _isSpeaking = true;
-      _isPaused = false;
-    });
-  }
-
-  Future<void> _toggleTts() async {
-    await _applyTtsSettings();
-    if (_isSpeaking && !_isPaused) {
-      await _tts.pause();
-      if (!mounted) return;
-      setState(() => _isPaused = true);
-    } else if (_isPaused) {
-      final index = _ttsQueueIndex.clamp(0, _ttsQueue.length - 1).toInt();
-      final chunk = _ttsQueue.isNotEmpty ? _ttsQueue[index] : _currentContent;
-      await _tts.speak(chunk);
-      if (!mounted) return;
-      setState(() => _isPaused = false);
-    } else {
-      await _speakText(_currentContent);
-    }
-  }
-
-  Future<void> _stopTts() async {
-    await _tts.stop();
-    if (!mounted) return;
-    setState(() {
-      _isSpeaking = false;
-      _isPaused = false;
-      _ttsQueue = const [];
-      _ttsQueueIndex = 0;
-    });
-  }
 
   (int, String) _getCurrentParagraphInfo() {
     final paragraphs = _currentContent
@@ -327,9 +233,32 @@ class _ReadingScreenState extends State<ReadingScreen> {
     );
   }
 
-  Future<void> _speakSelection(String selectedText) async {
-    await TtsService.instance.speak(selectedText);
+  Future<void> _speakSelectionFromParagraph(
+    String selectedText,
+    int targetParagraphIndex, {
+    int? start,
+    int? end,
+  }) async {
+    await TtsService.instance.speakFromSelection(
+      fullText: _currentContent,
+      selectedText: selectedText,
+      selectionStart: start,
+      selectionEnd: end,
+      targetParagraphIndex: targetParagraphIndex,
+      storyId: widget.story.id,
+    );
   }
+
+  Future<void> _speakSelection(String selectedText) async {
+
+    await TtsService.instance.speakFromSelection(
+      fullText: _currentContent,
+      selectedText: selectedText,
+      storyId: widget.story.id,
+    );
+  }
+
+
 
   void _showSelectionSearch(String selectedText) {
     final query = selectedText.trim();
@@ -445,7 +374,7 @@ class _ReadingScreenState extends State<ReadingScreen> {
     if (_scrollController.hasClients) {
       _recordHistory(offset: _scrollController.offset);
     }
-    _tts.stop();
+    TtsService.instance.removeListener(_onTtsStateChange);
     _scrollController.dispose();
     super.dispose();
   }
@@ -483,15 +412,38 @@ class _ReadingScreenState extends State<ReadingScreen> {
                         onShare: _shareSelection,
                       ),
                       const SizedBox(height: 24),
-                      ReaderSelectableText(
-                        _currentContent,
-                        style: settings.bodyTextStyle,
-                        onNote: _saveSelectionNote,
-                        onSpeak: _speakSelection,
-                        onSearch: _showSelectionSearch,
-                        onSettings: (_) => _showSettings(),
-                        onShare: _shareSelection,
+                      Builder(
+                        builder: (context) {
+                          final parsedParagraphs = TtsService.parseParagraphs(_currentContent);
+                          return Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: List.generate(parsedParagraphs.length, (i) {
+                              final p = parsedParagraphs[i];
+                              return _ParagraphWidget(
+                                key: ValueKey('rs_p_$i'),
+                                paragraphIndex: i,
+                                chapterIndex: 0,
+                                text: p.text,
+                                style: settings.bodyTextStyle,
+                                onNote: _saveSelectionNote,
+                                onSpeak: (selectedText) =>
+                                    _speakSelectionFromParagraph(selectedText, i),
+                                onSelectionSpeak: (selectedText, start, end) =>
+                                    _speakSelectionFromParagraph(
+                                  selectedText,
+                                  i,
+                                  start: start,
+                                  end: end,
+                                ),
+                                onSearch: _showSelectionSearch,
+                                onSettings: (_) => _showSettings(),
+                                onShare: _shareSelection,
+                              );
+                            }),
+                          );
+                        },
                       ),
+
                       const SizedBox(height: 80),
                       _TextEndCard(
                         textColor: settings.textColor,
@@ -619,10 +571,10 @@ class _ReadingScreenState extends State<ReadingScreen> {
                               PopupMenuItem(
                                 value: 'audio',
                                 child: _TextReaderMenuItem(
-                                  icon: _isSpeaking && !_isPaused
+                                  icon: TtsService.instance.isPlaying
                                       ? Icons.pause_circle_outline
                                       : Icons.play_circle_outline,
-                                  label: _isSpeaking && !_isPaused
+                                  label: TtsService.instance.isPlaying
                                       ? 'Tạm dừng audio'
                                       : 'Đọc bằng audio',
                                 ),
@@ -729,13 +681,13 @@ class _ReadingScreenState extends State<ReadingScreen> {
                               ],
                             ),
                           ),
-                          if (_isSpeaking)
-                            _ReaderAudioBar(
-                              isPaused: _isPaused,
-                              textColor: settings.textColor,
-                              onToggle: _toggleTts,
-                              onStop: _stopTts,
+                          TtsPlayerContainer(
+                            textColor: settings.textColor,
+                            onOpenSettings: () => TtsControlSheet.show(
+                              context,
+                              textContent: _currentContent,
                             ),
+                          ),
                         ],
                       ),
                     ),
@@ -750,66 +702,7 @@ class _ReadingScreenState extends State<ReadingScreen> {
   }
 }
 
-class _ReaderAudioBar extends StatelessWidget {
-  final bool isPaused;
-  final Color textColor;
-  final VoidCallback onToggle;
-  final VoidCallback onStop;
 
-  const _ReaderAudioBar({
-    required this.isPaused,
-    required this.textColor,
-    required this.onToggle,
-    required this.onStop,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final accent = Theme.of(context).primaryColor;
-
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 0, 16, 10),
-      child: Container(
-        height: 44,
-        decoration: BoxDecoration(
-          color: textColor.withValues(alpha: 0.08),
-          borderRadius: BorderRadius.circular(8),
-          border: Border.all(color: textColor.withValues(alpha: 0.10)),
-        ),
-        child: Row(
-          children: [
-            const SizedBox(width: 6),
-            IconButton(
-              onPressed: onToggle,
-              tooltip: isPaused ? 'Tiếp tục nghe' : 'Tạm dừng',
-              icon: Icon(isPaused ? Icons.play_arrow : Icons.pause),
-              color: accent,
-            ),
-            Expanded(
-              child: Text(
-                isPaused ? 'Audio đang tạm dừng' : 'Đang đọc bằng giọng nói',
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: TextStyle(
-                  color: textColor.withValues(alpha: 0.72),
-                  fontSize: 12,
-                  fontWeight: FontWeight.w600,
-                ),
-              ),
-            ),
-            IconButton(
-              onPressed: onStop,
-              tooltip: 'Dừng audio',
-              icon: const Icon(Icons.stop_rounded),
-              color: textColor.withValues(alpha: 0.72),
-            ),
-            const SizedBox(width: 4),
-          ],
-        ),
-      ),
-    );
-  }
-}
 
 class _SelectionSearchSheet extends StatelessWidget {
   final String query;
@@ -1271,3 +1164,74 @@ class _SettingsSheet extends StatelessWidget {
     );
   }
 }
+
+class _ParagraphWidget extends StatelessWidget {
+  final int paragraphIndex;
+  final int chapterIndex;
+  final String text;
+  final TextStyle style;
+  final ReaderTextAction? onNote;
+  final ReaderTextAction? onSpeak;
+  final ReaderSelectionAction? onSelectionSpeak;
+  final ReaderTextAction? onSearch;
+  final ReaderTextAction? onSettings;
+  final ReaderTextAction? onShare;
+
+  const _ParagraphWidget({
+    super.key,
+    required this.paragraphIndex,
+    required this.chapterIndex,
+    required this.text,
+    required this.style,
+    this.onNote,
+    this.onSpeak,
+    this.onSelectionSpeak,
+    this.onSearch,
+    this.onSettings,
+    this.onShare,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return ListenableBuilder(
+      listenable: TtsService.instance,
+      builder: (context, _) {
+        final tts = TtsService.instance;
+        final isCurrent = (tts.isPlaying || tts.isPaused) &&
+            tts.currentParagraphIndex == paragraphIndex;
+
+        final colorScheme = Theme.of(context).colorScheme;
+        final highlightColor = isCurrent
+            ? colorScheme.primaryContainer.withValues(alpha: 0.35)
+            : Colors.transparent;
+
+        return AnimatedContainer(
+          duration: const Duration(milliseconds: 250),
+          margin: const EdgeInsets.symmetric(vertical: 3),
+          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
+          decoration: BoxDecoration(
+            color: highlightColor,
+            borderRadius: BorderRadius.circular(8),
+            border: isCurrent
+                ? Border.all(
+                    color: colorScheme.primary.withValues(alpha: 0.4),
+                    width: 1,
+                  )
+                : null,
+          ),
+          child: ReaderSelectableText(
+            text,
+            style: style,
+            onNote: onNote,
+            onSpeak: onSpeak,
+            onSelectionSpeak: onSelectionSpeak,
+            onSearch: onSearch,
+            onSettings: onSettings,
+            onShare: onShare,
+          ),
+        );
+      },
+    );
+  }
+}
+

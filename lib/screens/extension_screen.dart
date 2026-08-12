@@ -7,6 +7,67 @@ import '../models/plugin_info.dart';
 import '../services/extension_service.dart';
 import 'source_browse_screen.dart';
 
+Future<bool> showExtensionCleartextWarningDialog(
+  BuildContext context, {
+  required String host,
+  required String actionLabel,
+}) async {
+  final confirmed = await showDialog<bool>(
+    context: context,
+    builder: (ctx) => AlertDialog(
+      title: const Text('Canh bao ket noi HTTP'),
+      content: Text(
+        'URL nay su dung HTTP cho "$host". Noi dung co the bi doc hoac bi '
+        'thay doi tren duong truyen.\n\n'
+        'Chi tiep tuc neu ban tin tuong nguon nay.',
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(ctx, false),
+          child: const Text('Huy'),
+        ),
+        FilledButton(
+          onPressed: () => Navigator.pop(ctx, true),
+          child: Text(actionLabel),
+        ),
+      ],
+    ),
+  );
+  return confirmed == true;
+}
+
+void _showExtensionUrlError(BuildContext context, String message) {
+  ScaffoldMessenger.of(context).showSnackBar(
+    SnackBar(
+      content: Text(message),
+      backgroundColor: Colors.red.shade700,
+      behavior: SnackBarBehavior.floating,
+    ),
+  );
+}
+
+Future<ExtensionUrlValidationResult?> confirmUserProvidedExtensionUrl(
+  BuildContext context,
+  String input, {
+  required String actionLabel,
+}) async {
+  final validation = ExtensionService.validateUserProvidedUrl(input);
+  if (!validation.isValid) {
+    _showExtensionUrlError(context, validation.errorMessage!);
+    return null;
+  }
+
+  if (!validation.isCleartext) return validation;
+
+  final confirmed = await showExtensionCleartextWarningDialog(
+    context,
+    host: validation.host,
+    actionLabel: actionLabel,
+  );
+  if (!confirmed) return null;
+  return validation;
+}
+
 class ExtensionScreen extends StatefulWidget {
   const ExtensionScreen({super.key});
 
@@ -159,7 +220,9 @@ class _ExtensionScreenState extends State<ExtensionScreen>
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('Lỗi cài đặt: ${e.toString().replaceAll('Exception: ', '')}'),
+            content: Text(
+              'Lỗi cài đặt: ${e.toString().replaceAll('Exception: ', '')}',
+            ),
             backgroundColor: Colors.red.shade700,
             behavior: SnackBarBehavior.floating,
             duration: const Duration(seconds: 4),
@@ -228,7 +291,9 @@ class _ExtensionScreenState extends State<ExtensionScreen>
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('Lỗi cài đặt ZIP: ${e.toString().replaceAll('Exception: ', '')}'),
+            content: Text(
+              'Lỗi cài đặt ZIP: ${e.toString().replaceAll('Exception: ', '')}',
+            ),
             backgroundColor: Colors.red.shade700,
           ),
         );
@@ -247,6 +312,7 @@ class _ExtensionScreenState extends State<ExtensionScreen>
         content: TextField(
           controller: urlController,
           autofocus: true,
+          keyboardType: TextInputType.url,
           decoration: const InputDecoration(
             hintText: 'https://example.com/extension.zip',
             labelText: 'URL file .zip',
@@ -266,10 +332,18 @@ class _ExtensionScreenState extends State<ExtensionScreen>
     );
 
     if (url == null || url.isEmpty) return;
+    if (!mounted) return;
+
+    final validation = await confirmUserProvidedExtensionUrl(
+      context,
+      url,
+      actionLabel: 'Tiep tuc cai dat',
+    );
+    if (!mounted || validation == null) return;
 
     setState(() => _isLoading = true);
     try {
-      final plugin = await ExtensionService.installFromZipUrl(url);
+      final plugin = await ExtensionService.installFromZipUrl(validation.url);
       await _loadExtensions();
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -283,7 +357,9 @@ class _ExtensionScreenState extends State<ExtensionScreen>
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('Lỗi tải URL ZIP: ${e.toString().replaceAll('Exception: ', '')}'),
+            content: Text(
+              'Lỗi tải URL ZIP: ${e.toString().replaceAll('Exception: ', '')}',
+            ),
             backgroundColor: Colors.red.shade700,
           ),
         );
@@ -311,7 +387,9 @@ class _ExtensionScreenState extends State<ExtensionScreen>
             ListTile(
               leading: const Icon(Icons.link_rounded, color: Colors.purple),
               title: const Text('Cài đặt từ URL file .ZIP trực tiếp'),
-              subtitle: const Text('Nhập đường dẫn URL tới file .zip extension'),
+              subtitle: const Text(
+                'Nhập đường dẫn URL tới file .zip extension',
+              ),
               onTap: () {
                 Navigator.pop(ctx);
                 _installFromZipUrl();
@@ -409,13 +487,21 @@ class _ExtensionScreenState extends State<ExtensionScreen>
           if (!_isSearching) ...[
             // Nút ẩn/hiện 18+ nhanh trong AppBar
             Tooltip(
-              message: _hideNsfw ? 'Đang ẩn 18+ — Nhấn để hiện' : 'Đang hiện 18+ — Nhấn để ẩn',
+              message: _hideNsfw
+                  ? 'Đang ẩn 18+ — Nhấn để hiện'
+                  : 'Đang hiện 18+ — Nhấn để ẩn',
               child: InkWell(
                 onTap: _toggleNsfw,
                 borderRadius: BorderRadius.circular(8),
                 child: Container(
-                  margin: const EdgeInsets.symmetric(vertical: 8, horizontal: 4),
-                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                  margin: const EdgeInsets.symmetric(
+                    vertical: 8,
+                    horizontal: 4,
+                  ),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 10,
+                    vertical: 4,
+                  ),
                   decoration: BoxDecoration(
                     color: _hideNsfw
                         ? Colors.grey.withValues(alpha: 0.15)
@@ -470,29 +556,24 @@ class _ExtensionScreenState extends State<ExtensionScreen>
           controller: _tabController,
           tabs: [
             Tab(
-              text: 'Tất cả (${_allPlugins.where((p) => _hideNsfw ? !p.isNsfw : true).length})',
+              text:
+                  'Tất cả (${_allPlugins.where((p) => _hideNsfw ? !p.isNsfw : true).length})',
             ),
-            Tab(
-              text: 'Đã cài (${_installedPlugins.length})',
-            ),
+            Tab(text: 'Đã cài (${_installedPlugins.length})'),
           ],
         ),
-
       ),
       body: _isLoading
           ? const Center(child: CircularProgressIndicator())
           : _error != null && _allPlugins.isEmpty
-              ? _buildErrorState()
-              : TabBarView(
-                  controller: _tabController,
-                  children: [
-                    _buildPluginList(_filteredPlugins, showAll: true),
-                    _buildPluginList(
-                      _filteredPlugins,
-                      showAll: false,
-                    ),
-                  ],
-                ),
+          ? _buildErrorState()
+          : TabBarView(
+              controller: _tabController,
+              children: [
+                _buildPluginList(_filteredPlugins, showAll: true),
+                _buildPluginList(_filteredPlugins, showAll: false),
+              ],
+            ),
     );
   }
 
@@ -562,7 +643,8 @@ class _ExtensionScreenState extends State<ExtensionScreen>
     return ListView.separated(
       padding: const EdgeInsets.symmetric(vertical: 8),
       itemCount: plugins.length,
-      separatorBuilder: (context, index) => const Divider(height: 1, indent: 72),
+      separatorBuilder: (context, index) =>
+          const Divider(height: 1, indent: 72),
       itemBuilder: (context, index) {
         final plugin = plugins[index];
         return _PluginTile(
@@ -779,7 +861,10 @@ class _PluginTile extends StatelessWidget {
                       const PopupMenuItem(
                         value: 'update',
                         child: ListTile(
-                          leading: Icon(Icons.system_update, color: Colors.green),
+                          leading: Icon(
+                            Icons.system_update,
+                            color: Colors.green,
+                          ),
                           title: Text('Cập nhật'),
                           contentPadding: EdgeInsets.zero,
                           dense: true,
@@ -815,7 +900,8 @@ class _PluginTile extends StatelessWidget {
               width: 46,
               height: 46,
               fit: BoxFit.cover,
-              errorWidget: (ctx, url, err) => _PlaceholderIcon(type: plugin.type),
+              errorWidget: (ctx, url, err) =>
+                  _PlaceholderIcon(type: plugin.type),
               placeholder: (ctx, url) => _PlaceholderIcon(type: plugin.type),
             )
           : _PlaceholderIcon(type: plugin.type),
@@ -1007,7 +1093,9 @@ class _FilterSheetState extends State<_FilterSheet> {
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Text(
-                          widget.hideNsfw ? 'Đang ẩn nội dung 18+' : 'Đang hiện nội dung 18+',
+                          widget.hideNsfw
+                              ? 'Đang ẩn nội dung 18+'
+                              : 'Đang hiện nội dung 18+',
                           style: TextStyle(
                             fontSize: 14,
                             fontWeight: FontWeight.w600,
@@ -1159,7 +1247,16 @@ class _RegistryManagerSheetState extends State<_RegistryManagerSheet> {
       ),
     );
     if (url == null || url.isEmpty) return;
-    await ExtensionService.addRegistryUrl(url);
+    if (!mounted) return;
+
+    final validation = await confirmUserProvidedExtensionUrl(
+      context,
+      url,
+      actionLabel: 'Tiep tuc them',
+    );
+    if (!mounted || validation == null) return;
+
+    await ExtensionService.addRegistryUrl(validation.url);
     await _loadRegistries();
   }
 
@@ -1188,7 +1285,8 @@ class _RegistryManagerSheetState extends State<_RegistryManagerSheet> {
         children: [
           Center(
             child: Container(
-              width: 36, height: 4,
+              width: 36,
+              height: 4,
               margin: const EdgeInsets.only(bottom: 16),
               decoration: BoxDecoration(
                 color: Colors.grey.shade400,
@@ -1232,7 +1330,8 @@ class _RegistryManagerSheetState extends State<_RegistryManagerSheet> {
               itemBuilder: (context, index) {
                 final url = _registries[index];
                 final isBuiltin = _builtinLabels.containsKey(url);
-                final label = _builtinLabels[url] ??
+                final label =
+                    _builtinLabels[url] ??
                     Uri.tryParse(url)?.pathSegments
                         .where((s) => s.isNotEmpty)
                         .take(2)
@@ -1242,7 +1341,8 @@ class _RegistryManagerSheetState extends State<_RegistryManagerSheet> {
                 return ListTile(
                   contentPadding: EdgeInsets.zero,
                   leading: Container(
-                    width: 36, height: 36,
+                    width: 36,
+                    height: 36,
                     decoration: BoxDecoration(
                       color: isBuiltin
                           ? accent.withValues(alpha: 0.12)
@@ -1272,10 +1372,17 @@ class _RegistryManagerSheetState extends State<_RegistryManagerSheet> {
                   trailing: isBuiltin
                       ? Tooltip(
                           message: 'Registry tích hợp sẵn',
-                          child: Icon(Icons.lock_outline, size: 16, color: subColor),
+                          child: Icon(
+                            Icons.lock_outline,
+                            size: 16,
+                            color: subColor,
+                          ),
                         )
                       : IconButton(
-                          icon: const Icon(Icons.delete_outline, color: Colors.red),
+                          icon: const Icon(
+                            Icons.delete_outline,
+                            color: Colors.red,
+                          ),
                           tooltip: 'Xóa kho',
                           onPressed: () => _removeRegistry(url),
                         ),

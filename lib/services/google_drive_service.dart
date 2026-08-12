@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
@@ -5,12 +6,56 @@ import 'dart:typed_data';
 import 'package:http/http.dart' as http;
 
 import '../models/story.dart';
+import '../utils/app_performance_logger.dart';
+
+class DrivePage<T> {
+  final List<T> items;
+  final String? nextPageToken;
+  final bool hasMore;
+
+  const DrivePage({
+    required this.items,
+    this.nextPageToken,
+    required this.hasMore,
+  });
+}
+
+class RequestConcurrencyLimiter {
+  final int maxConcurrency;
+  int _activeRequests = 0;
+  final _queue = <Completer<void>>[];
+
+  RequestConcurrencyLimiter({this.maxConcurrency = 3});
+
+  int get activeRequests => _activeRequests;
+
+  Future<T> run<T>(Future<T> Function() fn) async {
+    if (_activeRequests >= maxConcurrency) {
+      final completer = Completer<void>();
+      _queue.add(completer);
+      await completer.future;
+    }
+    _activeRequests++;
+    AppPerformanceLogger.log(
+      '[PERF][DRIVE] Active requests: $_activeRequests / $maxConcurrency',
+    );
+    try {
+      return await fn();
+    } finally {
+      _activeRequests--;
+      if (_queue.isNotEmpty) {
+        final next = _queue.removeAt(0);
+        next.complete();
+      }
+    }
+  }
+}
+
+final RequestConcurrencyLimiter _driveConcurrencyLimiter =
+    RequestConcurrencyLimiter(maxConcurrency: 3);
 
 class GoogleDriveService {
-  static const String apiKey = String.fromEnvironment(
-    'GOOGLE_DRIVE_API_KEY',
-    defaultValue: 'AIzaSyDKJeyLnSj0DDYoe9z0j2Sh49C0trG_6Z4',
-  );
+  static const String apiKey = String.fromEnvironment('GOOGLE_DRIVE_API_KEY');
   static const String defaultFolderUrl = String.fromEnvironment(
     'GOOGLE_DRIVE_FOLDER_URL',
   );
@@ -327,21 +372,74 @@ class GoogleDriveService {
     );
   }
 
-  static Future<List<_DriveFile>> _listChildren(String folderId) async {
-    final files = <_DriveFile>[];
-    String? pageToken;
+  static Future<DrivePage<Story>> fetchStoriesPage({
+    int pageSize = 50,
+    String? pageToken,
+    Iterable<String> extraFolderUrls = const [],
+  }) async {
+    _ensureApiKey();
+    AppPerformanceLogger.log(
+      '[PERF][DRIVE] fetch page start (pageSize: $pageSize, token: $pageToken)',
+    );
+    final stopwatch = Stopwatch()..start();
 
-    do {
+    final folderUrls = {
+      ..._configuredFolderUrls(),
+      ...extraFolderUrls,
+    }.toList();
+
+    if (folderUrls.isEmpty) {
+      return const DrivePage(items: [], hasMore: false);
+    }
+
+    final rootFolderId = extractFolderId(folderUrls.first) ?? '';
+    if (rootFolderId.isEmpty) {
+      return const DrivePage(items: [], hasMore: false);
+    }
+
+    final filePage = await _listChildrenPage(
+      rootFolderId,
+      pageSize: pageSize,
+      pageToken: pageToken,
+    );
+
+    final stories = <Story>[];
+    final children = filePage.files;
+
+    final ebookFiles = children.where((file) => file.isStoryFile).toList();
+    for (final file in ebookFiles) {
+      stories.add(_storyFromDriveFile(file));
+    }
+
+    final deduped = _dedupeStories(stories);
+    stopwatch.stop();
+    AppPerformanceLogger.log(
+      '[PERF][DRIVE] fetch page complete (${deduped.length} items in ${stopwatch.elapsedMilliseconds}ms, hasMore: ${filePage.hasNextPage})',
+    );
+
+    return DrivePage(
+      items: deduped,
+      nextPageToken: filePage.nextPageToken,
+      hasMore: filePage.hasNextPage,
+    );
+  }
+
+  static Future<_DriveFilePage> _listChildrenPage(
+    String folderId, {
+    int pageSize = 50,
+    String? pageToken,
+  }) async {
+    return _driveConcurrencyLimiter.run(() async {
       final query = "'$folderId' in parents and trashed = false";
       final params = <String, String>{
         'q': query,
         'key': apiKey,
-        'pageSize': '1000',
+        'pageSize': pageSize.toString(),
         'orderBy': 'folder,name',
         'fields':
             'nextPageToken,files(id,name,mimeType,thumbnailLink,modifiedTime,size)',
       };
-      if (pageToken != null) {
+      if (pageToken != null && pageToken.isNotEmpty) {
         params['pageToken'] = pageToken;
       }
 
@@ -355,15 +453,59 @@ class GoogleDriveService {
 
       final data = json.decode(utf8.decode(response.bodyBytes));
       final items = data['files'] as List<dynamic>? ?? [];
-      files.addAll(
-        items.whereType<Map>().map(
-          (item) => _DriveFile.fromJson(Map<String, dynamic>.from(item)),
-        ),
-      );
-      pageToken = data['nextPageToken']?.toString();
-    } while (pageToken != null && pageToken.isNotEmpty);
+      final files = items
+          .whereType<Map>()
+          .map((item) => _DriveFile.fromJson(Map<String, dynamic>.from(item)))
+          .toList();
+      final nextToken = data['nextPageToken']?.toString();
 
-    return files;
+      return _DriveFilePage(
+        files: files,
+        nextPageToken: nextToken,
+        hasNextPage: nextToken != null && nextToken.isNotEmpty,
+      );
+    });
+  }
+
+  static Future<List<_DriveFile>> _listChildren(String folderId) async {
+    return _driveConcurrencyLimiter.run(() async {
+      final files = <_DriveFile>[];
+      String? pageToken;
+
+      do {
+        final query = "'$folderId' in parents and trashed = false";
+        final params = <String, String>{
+          'q': query,
+          'key': apiKey,
+          'pageSize': '1000',
+          'orderBy': 'folder,name',
+          'fields':
+              'nextPageToken,files(id,name,mimeType,thumbnailLink,modifiedTime,size)',
+        };
+        if (pageToken != null) {
+          params['pageToken'] = pageToken;
+        }
+
+        final response = await http
+            .get(Uri.https('www.googleapis.com', '/drive/v3/files', params))
+            .timeout(const Duration(seconds: 15));
+
+        if (response.statusCode != 200) {
+          throw Exception('Không tải được thư mục Drive: ${response.body}');
+        }
+
+        final data = json.decode(utf8.decode(response.bodyBytes));
+        final items = data['files'] as List<dynamic>? ?? [];
+        files.addAll(
+          items.whereType<Map>().map(
+            (item) => _DriveFile.fromJson(Map<String, dynamic>.from(item)),
+          ),
+        );
+        pageToken = data['nextPageToken']?.toString();
+      } while (pageToken != null && pageToken.isNotEmpty);
+
+      return files;
+    });
   }
 
   static _DriveFile? _findNamedFile(List<_DriveFile> files, String name) {
@@ -465,6 +607,11 @@ class GoogleDriveService {
     final trimmed = imagePath.trim();
     if (trimmed.isEmpty || !trimmed.startsWith('http')) {
       return trimmed.isEmpty ? const [] : [trimmed];
+    }
+
+    if (!trimmed.contains('drive.google.com') &&
+        !trimmed.contains('googleapis.com')) {
+      return [trimmed];
     }
 
     final fileId = extractFileId(trimmed);
@@ -802,6 +949,18 @@ class _FolderScanResult {
   final String? error;
 
   const _FolderScanResult({this.stories = const [], this.error});
+}
+
+class _DriveFilePage {
+  final List<_DriveFile> files;
+  final String? nextPageToken;
+  final bool hasNextPage;
+
+  _DriveFilePage({
+    required this.files,
+    this.nextPageToken,
+    required this.hasNextPage,
+  });
 }
 
 class _DriveFile {

@@ -1,11 +1,15 @@
-import 'dart:convert';
 import 'dart:async';
-import 'package:archive/archive.dart';
-import 'package:flutter/foundation.dart';
-import 'package:shared_preferences/shared_preferences.dart';
-import 'package:flutter/services.dart';
+import 'dart:convert';
 import 'dart:io';
+import 'dart:math';
+import 'dart:typed_data';
+
+import 'package:archive/archive.dart';
+import 'package:crypto/crypto.dart';
+import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart';
 import 'package:path_provider/path_provider.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:uuid/uuid.dart';
 import 'package:epub_view/epub_view.dart';
 import 'package:epubx/epubx.dart' as epubx;
@@ -52,6 +56,13 @@ class ApiService {
   static const String _authTokenKey = 'firebase_auth_token';
   static const String _authUserKey = 'firebase_auth_user';
   static const String _localAccountsKey = 'local_accounts';
+  static const String _legacyPasswordKey = 'password';
+  static const String _passwordHashKey = 'passwordHash';
+  static const String _passwordHashAlgorithm = 'pbkdf2_sha256';
+  static const int _passwordHashVersion = 1;
+  static const int _passwordHashIterations = 120000;
+  static const int _passwordSaltBytes = 16;
+  static const int _passwordHashBytes = 32;
   static const String _localCommunityMessagesKey = 'local_community_messages';
   static const String _readingHistoryKey = 'reading_history_markers';
   static const String _readingBookmarksKey = 'reading_bookmarks';
@@ -798,7 +809,8 @@ class ApiService {
     final stories = localStoriesJson
         .map((s) => Story.fromJson(json.decode(s)))
         .toList();
-    return _repairMissingLocalEpubCovers(prefs, stories);
+    unawaited(_repairMissingLocalEpubCovers(prefs, stories));
+    return stories;
   }
 
   static Future<List<Story>> _repairMissingLocalEpubCovers(
@@ -948,7 +960,8 @@ class ApiService {
     final rawUser = prefs.getString(_authUserKey);
     if (rawUser == null || rawUser.isEmpty) return null;
     final user = AppUser.fromJson(json.decode(rawUser) as Map<String, dynamic>);
-    final isAdmin = FirebaseBackendService.isAdminEmail(user.email) || user.role == 'admin';
+    final isAdmin =
+        FirebaseBackendService.isAdminEmail(user.email) || user.role == 'admin';
     if (isAdmin) {
       return user.copyWith(role: 'admin');
     }
@@ -957,7 +970,8 @@ class ApiService {
 
   static Future<void> _saveAuthSession(AppUser user, String token) async {
     final prefs = await SharedPreferences.getInstance();
-    final isAdmin = FirebaseBackendService.isAdminEmail(user.email) || user.role == 'admin';
+    final isAdmin =
+        FirebaseBackendService.isAdminEmail(user.email) || user.role == 'admin';
     final finalUser = isAdmin ? user.copyWith(role: 'admin') : user;
     await prefs.setString(_authTokenKey, token);
     await prefs.setString(_authUserKey, json.encode(finalUser.toJson()));
@@ -997,6 +1011,153 @@ class ApiService {
     }
   }
 
+  static List<Map<String, dynamic>> _decodeLocalAccounts(
+    List<String> accounts,
+  ) {
+    final decodedAccounts = <Map<String, dynamic>>[];
+    for (final rawAccount in accounts) {
+      try {
+        final decoded = json.decode(rawAccount);
+        if (decoded is Map) {
+          decodedAccounts.add(Map<String, dynamic>.from(decoded));
+        }
+      } catch (_) {}
+    }
+    return decodedAccounts;
+  }
+
+  static Future<void> _saveDecodedLocalAccounts(
+    SharedPreferences prefs,
+    List<Map<String, dynamic>> accounts,
+  ) {
+    return prefs.setStringList(
+      _localAccountsKey,
+      accounts.map((account) => json.encode(account)).toList(),
+    );
+  }
+
+  static Map<String, dynamic> _passwordHashRecord(String password) {
+    final salt = _secureRandomBytes(_passwordSaltBytes);
+    final hash = _pbkdf2HmacSha256(
+      password: password,
+      salt: salt,
+      iterations: _passwordHashIterations,
+      length: _passwordHashBytes,
+    );
+    return {
+      _passwordHashKey:
+          '$_passwordHashAlgorithm\$v=$_passwordHashVersion\$i=$_passwordHashIterations\$s=${_base64UrlNoPadding(salt)}\$h=${_base64UrlNoPadding(hash)}',
+    };
+  }
+
+  static List<int> _secureRandomBytes(int length) {
+    final random = Random.secure();
+    return List<int>.generate(length, (_) => random.nextInt(256));
+  }
+
+  static String _base64UrlNoPadding(List<int> bytes) {
+    return base64Url.encode(bytes).replaceAll('=', '');
+  }
+
+  static List<int> _base64UrlDecodeNoPadding(String value) {
+    final padding = (4 - value.length % 4) % 4;
+    return base64Url.decode(value.padRight(value.length + padding, '='));
+  }
+
+  static bool _verifyPassword(String password, Map<String, dynamic> account) {
+    final storedHash = account[_passwordHashKey]?.toString() ?? '';
+    if (storedHash.isEmpty) return false;
+    return _verifyPasswordHash(password, storedHash);
+  }
+
+  static bool _verifyPasswordHash(String password, String storedHash) {
+    try {
+      final parts = storedHash.split(r'$');
+      if (parts.length != 5 || parts[0] != _passwordHashAlgorithm) {
+        return false;
+      }
+
+      final version = _parseHashPartInt(parts[1], 'v');
+      final iterations = _parseHashPartInt(parts[2], 'i');
+      final salt = _base64UrlDecodeNoPadding(_parseHashPart(parts[3], 's'));
+      final expectedHash = _base64UrlDecodeNoPadding(
+        _parseHashPart(parts[4], 'h'),
+      );
+      if (version != _passwordHashVersion ||
+          iterations <= 0 ||
+          salt.isEmpty ||
+          expectedHash.isEmpty) {
+        return false;
+      }
+
+      final actualHash = _pbkdf2HmacSha256(
+        password: password,
+        salt: salt,
+        iterations: iterations,
+        length: expectedHash.length,
+      );
+      return _constantTimeEquals(actualHash, expectedHash);
+    } catch (_) {
+      return false;
+    }
+  }
+
+  static String _parseHashPart(String value, String key) {
+    final prefix = '$key=';
+    if (!value.startsWith(prefix)) {
+      throw const FormatException('Invalid password hash field.');
+    }
+    return value.substring(prefix.length);
+  }
+
+  static int _parseHashPartInt(String value, String key) {
+    return int.parse(_parseHashPart(value, key));
+  }
+
+  static List<int> _pbkdf2HmacSha256({
+    required String password,
+    required List<int> salt,
+    required int iterations,
+    required int length,
+  }) {
+    final hmac = Hmac(sha256, utf8.encode(password));
+    final result = BytesBuilder(copy: false);
+    var blockIndex = 1;
+
+    while (result.length < length) {
+      var block = hmac.convert([...salt, ..._int32BigEndian(blockIndex)]).bytes;
+      final output = Uint8List.fromList(block);
+      for (var i = 1; i < iterations; i++) {
+        block = hmac.convert(block).bytes;
+        for (var j = 0; j < output.length; j++) {
+          output[j] ^= block[j];
+        }
+      }
+      result.add(output);
+      blockIndex++;
+    }
+
+    return result.takeBytes().sublist(0, length);
+  }
+
+  static List<int> _int32BigEndian(int value) {
+    return [
+      (value >> 24) & 0xff,
+      (value >> 16) & 0xff,
+      (value >> 8) & 0xff,
+      value & 0xff,
+    ];
+  }
+
+  static bool _constantTimeEquals(List<int> a, List<int> b) {
+    if (a.length != b.length) return false;
+    var diff = 0;
+    for (var i = 0; i < a.length; i++) {
+      diff |= a[i] ^ b[i];
+    }
+    return diff == 0;
+  }
+
   static Future<void> _saveLocalBackupAccount({
     required AppUser user,
     required String password,
@@ -1004,9 +1165,7 @@ class ApiService {
   }) async {
     final prefs = await SharedPreferences.getInstance();
     final accounts = prefs.getStringList(_localAccountsKey) ?? [];
-    final decodedAccounts = accounts
-        .map((a) => json.decode(a) as Map<String, dynamic>)
-        .toList();
+    final decodedAccounts = _decodeLocalAccounts(accounts);
 
     final index = decodedAccounts.indexWhere(
       (a) => a['email']?.toString().toLowerCase() == user.email.toLowerCase(),
@@ -1014,7 +1173,7 @@ class ApiService {
 
     final accountData = {
       ...user.toJson(),
-      'password': password,
+      ..._passwordHashRecord(password),
       'pendingCloudSync': pendingCloudSync,
     };
 
@@ -1024,10 +1183,7 @@ class ApiService {
       decodedAccounts.add(accountData);
     }
 
-    await prefs.setStringList(
-      _localAccountsKey,
-      decodedAccounts.map((account) => json.encode(account)).toList(),
-    );
+    await _saveDecodedLocalAccounts(prefs, decodedAccounts);
   }
 
   static Future<void> syncPendingCloudData() async {
@@ -1036,9 +1192,7 @@ class ApiService {
       final prefs = await SharedPreferences.getInstance();
       final accounts = prefs.getStringList(_localAccountsKey) ?? [];
       if (accounts.isNotEmpty) {
-        final decodedAccounts = accounts
-            .map((a) => json.decode(a) as Map<String, dynamic>)
-            .toList();
+        final decodedAccounts = _decodeLocalAccounts(accounts);
 
         bool changed = false;
         for (int i = 0; i < decodedAccounts.length; i++) {
@@ -1046,7 +1200,7 @@ class ApiService {
           if (account['pendingCloudSync'] == true) {
             try {
               final email = account['email']?.toString() ?? '';
-              final password = account['password']?.toString() ?? '';
+              final password = ''.trim();
               final displayName = account['displayName']?.toString() ?? '';
               if (email.isNotEmpty && password.isNotEmpty) {
                 try {
@@ -1057,7 +1211,7 @@ class ApiService {
                   );
                   decodedAccounts[i] = {
                     ...cloudUser.toJson(),
-                    'password': password,
+                    ..._passwordHashRecord(password),
                     'pendingCloudSync': false,
                   };
                   changed = true;
@@ -1072,7 +1226,7 @@ class ApiService {
                       );
                       decodedAccounts[i] = {
                         ...cloudUser.toJson(),
-                        'password': password,
+                        ..._passwordHashRecord(password),
                         'pendingCloudSync': false,
                       };
                       changed = true;
@@ -1368,9 +1522,7 @@ class ApiService {
 
     final prefs = await SharedPreferences.getInstance();
     final accounts = prefs.getStringList(_localAccountsKey) ?? [];
-    final decodedAccounts = accounts
-        .map((raw) => json.decode(raw) as Map<String, dynamic>)
-        .toList();
+    final decodedAccounts = _decodeLocalAccounts(accounts);
 
     final exists = decodedAccounts.any(
       (account) =>
@@ -1391,13 +1543,10 @@ class ApiService {
 
     decodedAccounts.add({
       ...user.toJson(),
-      'password': password,
+      ..._passwordHashRecord(password),
       'pendingCloudSync': pendingCloudSync,
     });
-    await prefs.setStringList(
-      _localAccountsKey,
-      decodedAccounts.map((account) => json.encode(account)).toList(),
-    );
+    await _saveDecodedLocalAccounts(prefs, decodedAccounts);
     await _saveAuthSession(user, user.id);
     return user;
   }
@@ -1409,12 +1558,15 @@ class ApiService {
     final normalizedEmail = email.trim().toLowerCase();
     final prefs = await SharedPreferences.getInstance();
     final accounts = prefs.getStringList(_localAccountsKey) ?? [];
+    final decodedAccounts = _decodeLocalAccounts(accounts);
 
     Map<String, dynamic>? found;
-    for (final rawAccount in accounts) {
-      final account = json.decode(rawAccount) as Map<String, dynamic>;
+    var foundIndex = -1;
+    for (var i = 0; i < decodedAccounts.length; i++) {
+      final account = decodedAccounts[i];
       if (account['email']?.toString().toLowerCase() == normalizedEmail) {
         found = account;
+        foundIndex = i;
         break;
       }
     }
@@ -1424,15 +1576,32 @@ class ApiService {
         'Tài khoản chưa tồn tại trên thiết bị. Vui lòng chuyển sang "Đăng ký" để tạo tài khoản mới.',
       );
     }
-    if (found['password']?.toString() != password) {
-      throw Exception('Mật khẩu không đúng.');
+    var shouldMigrateLegacyPassword = false;
+    if (found.containsKey(_passwordHashKey)) {
+      if (!_verifyPassword(password, found)) {
+        throw Exception('Mật khẩu không đúng.');
+      }
+    } else {
+      final legacyPassword = found[_legacyPasswordKey]?.toString();
+      if (legacyPassword == null || legacyPassword != password) {
+        throw Exception('Mật khẩu không đúng.');
+      }
+      shouldMigrateLegacyPassword = true;
+    }
+
+    if (shouldMigrateLegacyPassword && foundIndex >= 0) {
+      final migratedAccount = {...found, ..._passwordHashRecord(password)}
+        ..remove(_legacyPasswordKey);
+      decodedAccounts[foundIndex] = migratedAccount;
+      await _saveDecodedLocalAccounts(prefs, decodedAccounts);
+      found = migratedAccount;
     }
 
     final isAdmin = FirebaseBackendService.isAdminEmail(normalizedEmail);
     final savedRole = found['role']?.toString() ?? 'user';
-    final user = AppUser.fromJson(found).copyWith(
-      role: (isAdmin || savedRole == 'admin') ? 'admin' : 'user',
-    );
+    final user = AppUser.fromJson(
+      found,
+    ).copyWith(role: (isAdmin || savedRole == 'admin') ? 'admin' : 'user');
     await _saveAuthSession(user, user.id);
     return user;
   }
@@ -1440,8 +1609,7 @@ class ApiService {
   static Future<bool> _localAccountExists(String normalizedEmail) async {
     final prefs = await SharedPreferences.getInstance();
     final accounts = prefs.getStringList(_localAccountsKey) ?? [];
-    return accounts.any((raw) {
-      final account = json.decode(raw) as Map<String, dynamic>;
+    return _decodeLocalAccounts(accounts).any((account) {
       return account['email']?.toString().toLowerCase() == normalizedEmail;
     });
   }
@@ -1458,9 +1626,7 @@ class ApiService {
 
     final prefs = await SharedPreferences.getInstance();
     final accounts = prefs.getStringList(_localAccountsKey) ?? [];
-    final decodedAccounts = accounts
-        .map((raw) => json.decode(raw) as Map<String, dynamic>)
-        .toList();
+    final decodedAccounts = _decodeLocalAccounts(accounts);
 
     final index = decodedAccounts.indexWhere(
       (account) => account['id']?.toString() == savedUser.id,
@@ -1471,12 +1637,17 @@ class ApiService {
     );
 
     if (index != -1) {
-      final password = decodedAccounts[index]['password'];
-      decodedAccounts[index] = {...updatedUser.toJson(), 'password': password};
-      await prefs.setStringList(
-        _localAccountsKey,
-        decodedAccounts.map((account) => json.encode(account)).toList(),
-      );
+      final existingAccount = decodedAccounts[index];
+      final credentialFields = <String, dynamic>{
+        if (existingAccount.containsKey(_passwordHashKey))
+          _passwordHashKey: existingAccount[_passwordHashKey],
+        if (!existingAccount.containsKey(_passwordHashKey) &&
+            existingAccount.containsKey(_legacyPasswordKey))
+          _legacyPasswordKey: existingAccount[_legacyPasswordKey],
+        'pendingCloudSync': existingAccount['pendingCloudSync'] == true,
+      };
+      decodedAccounts[index] = {...updatedUser.toJson(), ...credentialFields};
+      await _saveDecodedLocalAccounts(prefs, decodedAccounts);
     }
 
     await _saveAuthSession(updatedUser, token);

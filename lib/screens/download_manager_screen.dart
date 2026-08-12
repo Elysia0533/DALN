@@ -1,6 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:share_plus/share_plus.dart';
+import '../models/plugin_info.dart';
+import '../models/source_models.dart';
 import '../services/offline_download_service.dart';
+import 'online_chapter_reader_screen.dart';
 
 class DownloadManagerScreen extends StatefulWidget {
   const DownloadManagerScreen({super.key});
@@ -292,6 +295,38 @@ class _DownloadManagerScreenState extends State<DownloadManagerScreen> {
                                 margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
                                 elevation: 0.5,
                                 child: ListTile(
+                                  onTap: () {
+                                    final List<dynamic> chaps = story['chapters'] as List<dynamic>? ?? [];
+                                    final List<ChapterNav> navList = chaps.map((c) => ChapterNav(
+                                      url: c['url'] ?? '',
+                                      name: c['name'] ?? '',
+                                    )).toList();
+
+                                    Navigator.push(
+                                      context,
+                                      MaterialPageRoute(
+                                        builder: (_) => OnlineChapterReaderScreen(
+                                          plugin: PluginInfo(
+                                            id: pluginId,
+                                            name: pluginId,
+                                            version: 1,
+                                            author: 'vBook',
+                                            description: '',
+                                            iconUrl: '',
+                                            downloadUrl: '',
+                                            locale: 'vi',
+                                            source: '',
+                                            type: 'novel',
+                                          ),
+                                          chapterUrl: navList.isNotEmpty ? navList.first.url : '',
+                                          chapterTitle: navList.isNotEmpty ? navList.first.name : 'Chương 1',
+                                          storyTitle: title,
+                                          allChapters: navList,
+                                          currentIndex: 0,
+                                        ),
+                                      ),
+                                    );
+                                  },
                                   leading: CircleAvatar(
                                     backgroundColor: colorScheme.primaryContainer,
                                     child: Icon(Icons.book_rounded, color: colorScheme.onPrimaryContainer),

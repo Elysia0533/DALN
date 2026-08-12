@@ -6,12 +6,15 @@ import 'package:path_provider/path_provider.dart';
 import 'dart:io';
 
 import '../models/story.dart';
+import '../models/plugin_info.dart';
 import '../services/api_service.dart';
+import '../services/extension_service.dart';
 import '../theme/theme_provider.dart';
 import '../utils/file_name_utils.dart';
 import '../widgets/story_cover_image.dart';
 import '../widgets/background_download_banner.dart';
 import 'story_detail_screen.dart';
+import 'online_story_detail_screen.dart';
 import 'explore_screen.dart';
 import 'community_screen.dart';
 import 'profile_screen.dart';
@@ -32,6 +35,7 @@ class _HomeScreenState extends State<HomeScreen> {
   List<Story> _personalStories = [];
   List<Story> _filteredStories = [];
   bool _isLoading = true;
+  int _visibleCount = 20;
 
   bool _isGridView = true;
   int _columnCount = 2;
@@ -63,6 +67,7 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   void _applySearch() {
+    _visibleCount = 20;
     final query = _searchQuery.trim().toLowerCase();
     if (query.isEmpty) {
       _filteredStories = List.from(_personalStories);
@@ -366,6 +371,40 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Future<void> _openStory(Story story) async {
+    if (story.pluginId.isNotEmpty && story.storyUrl.isNotEmpty) {
+      final installed = await ExtensionService.getInstalledPlugins();
+      final plugin = installed.firstWhere(
+        (p) => p.id == story.pluginId,
+        orElse: () => PluginInfo(
+          id: story.pluginId,
+          name: story.pluginId,
+          version: 1,
+          author: 'vBook',
+          description: '',
+          iconUrl: '',
+          downloadUrl: '',
+          locale: 'vi',
+          source: '',
+          type: story.fileType == 'comic' ? 'comic' : 'novel',
+        ),
+      );
+
+      await Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (_) => OnlineStoryDetailScreen(
+            plugin: plugin,
+            storyUrl: story.storyUrl,
+            initialTitle: story.title,
+            initialCover: story.iconUrl,
+          ),
+        ),
+      );
+      if (!mounted) return;
+      _loadStories();
+      return;
+    }
+
     await Navigator.push(
       context,
       MaterialPageRoute(builder: (_) => StoryDetailScreen(story: story)),
@@ -652,24 +691,80 @@ class _HomeScreenState extends State<HomeScreen> {
                     style: TextStyle(color: Colors.grey.shade500),
                   ),
                 )
-              : _isGridView
-              ? GridView.builder(
-                  padding: const EdgeInsets.fromLTRB(16, 0, 16, 20),
-                  gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-                    crossAxisCount: _columnCount,
-                    childAspectRatio: _columnCount == 2 ? 0.62 : 0.58,
-                    crossAxisSpacing: 14,
-                    mainAxisSpacing: 18,
+              : NotificationListener<ScrollNotification>(
+                  onNotification: (scrollInfo) {
+                    if (scrollInfo.metrics.pixels >=
+                        scrollInfo.metrics.maxScrollExtent - 300) {
+                      if (_visibleCount < _filteredStories.length) {
+                        setState(() {
+                          _visibleCount = (_visibleCount + 20).clamp(
+                            0,
+                            _filteredStories.length,
+                          );
+                        });
+                      }
+                    }
+                    return false;
+                  },
+                  child: Builder(
+                    builder: (context) {
+                      final visibleStories =
+                          _filteredStories.take(_visibleCount).toList();
+                      final hasMore = _visibleCount < _filteredStories.length;
+
+                      if (_isGridView) {
+                        return GridView.builder(
+                          padding: const EdgeInsets.fromLTRB(16, 0, 16, 20),
+                          gridDelegate:
+                              SliverGridDelegateWithFixedCrossAxisCount(
+                                crossAxisCount: _columnCount,
+                                childAspectRatio:
+                                    _columnCount == 2 ? 0.62 : 0.58,
+                                crossAxisSpacing: 14,
+                                mainAxisSpacing: 18,
+                              ),
+                          itemCount: visibleStories.length + (hasMore ? 1 : 0),
+                          itemBuilder: (context, index) {
+                            if (index >= visibleStories.length) {
+                              return const Center(
+                                child: Padding(
+                                  padding: EdgeInsets.all(12),
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 2,
+                                  ),
+                                ),
+                              );
+                            }
+                            return _buildStoryCard(
+                              visibleStories[index],
+                              isDark,
+                            );
+                          },
+                        );
+                      }
+
+                      return ListView.builder(
+                        padding: const EdgeInsets.only(bottom: 16),
+                        itemCount: visibleStories.length + (hasMore ? 1 : 0),
+                        itemBuilder: (context, index) {
+                          if (index >= visibleStories.length) {
+                            return const Center(
+                              child: Padding(
+                                padding: EdgeInsets.all(16),
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                ),
+                              ),
+                            );
+                          }
+                          return _buildStoryCard(
+                            visibleStories[index],
+                            isDark,
+                          );
+                        },
+                      );
+                    },
                   ),
-                  itemCount: _filteredStories.length,
-                  itemBuilder: (context, index) =>
-                      _buildStoryCard(_filteredStories[index], isDark),
-                )
-              : ListView.builder(
-                  padding: const EdgeInsets.only(bottom: 16),
-                  itemCount: _filteredStories.length,
-                  itemBuilder: (context, index) =>
-                      _buildStoryCard(_filteredStories[index], isDark),
                 ),
         ),
       ],

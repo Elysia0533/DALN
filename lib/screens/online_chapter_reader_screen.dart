@@ -9,6 +9,8 @@ import '../services/plugin/plugin_loader.dart';
 import '../theme/reading_settings_provider.dart';
 import '../widgets/reader_selectable_text.dart';
 import '../widgets/tts_control_sheet.dart';
+import '../widgets/tts_player_container.dart';
+import '../services/tts_service.dart';
 import '../services/offline_download_service.dart';
 import '../services/han_viet_translator_service.dart';
 import 'web_browser_screen.dart';
@@ -17,6 +19,7 @@ class OnlineChapterReaderScreen extends StatefulWidget {
   final PluginInfo plugin;
   final String chapterUrl;
   final String chapterTitle;
+  final String storyTitle;
   final List<ChapterNav>? allChapters;
   final int currentIndex;
 
@@ -25,6 +28,7 @@ class OnlineChapterReaderScreen extends StatefulWidget {
     required this.plugin,
     required this.chapterUrl,
     required this.chapterTitle,
+    this.storyTitle = '',
     this.allChapters,
     this.currentIndex = 0,
   });
@@ -40,24 +44,30 @@ class ChapterNav {
 }
 
 class _OnlineChapterReaderScreenState extends State<OnlineChapterReaderScreen> {
-  bool _isLoading = true;
-  String? _error;
-  String _content = '';
-  List<Page> _pages = [];
-  bool _isComic = false;
-  bool _showToolbars = false; // Immersive Mode: hidden by default
-  late int _currentIndex;
   late String _currentUrl;
   late String _currentTitle;
+  late int _currentIndex;
+
+  bool _isLoading = true;
+  String? _error;
+  List<Page> _pages = [];
+  String _content = '';
+  bool _isComic = false;
+  bool _showToolbars = true;
+
+  bool get _hasPrevious => widget.allChapters != null && _currentIndex > 0;
+  bool get _hasNext =>
+      widget.allChapters != null &&
+      _currentIndex < (widget.allChapters!.length - 1);
 
   final ScrollController _scrollController = ScrollController();
 
   @override
   void initState() {
     super.initState();
-    _currentIndex = widget.currentIndex;
     _currentUrl = widget.chapterUrl;
     _currentTitle = widget.chapterTitle;
+    _currentIndex = widget.currentIndex;
     _loadContent();
   }
 
@@ -67,16 +77,16 @@ class _OnlineChapterReaderScreenState extends State<OnlineChapterReaderScreen> {
     super.dispose();
   }
 
-  bool get _hasPrevious => widget.allChapters != null && _currentIndex > 0;
-  bool get _hasNext =>
-      widget.allChapters != null && _currentIndex < (widget.allChapters!.length - 1);
-
   String _cleanTextContent(String text) {
-    if (text.isEmpty) return '';
     return text
         .replaceAll(RegExp(r'<br\s*/?>', caseSensitive: false), '\n')
         .replaceAll(RegExp(r'</p>', caseSensitive: false), '\n\n')
         .replaceAll(RegExp(r'<[^>]*>'), '')
+        .replaceAll(RegExp(r'&nbsp;', caseSensitive: false), ' ')
+        .replaceAll(RegExp(r'&lt;', caseSensitive: false), '<')
+        .replaceAll(RegExp(r'&gt;', caseSensitive: false), '>')
+        .replaceAll(RegExp(r'&amp;', caseSensitive: false), '&')
+        .replaceAll(RegExp(r'&quot;', caseSensitive: false), '"')
         .replaceAll(RegExp(r'\n{3,}'), '\n\n')
         .trim();
   }
@@ -89,14 +99,47 @@ class _OnlineChapterReaderScreenState extends State<OnlineChapterReaderScreen> {
       _content = '';
     });
 
-    try {
-      final dirPath = await PluginLoader.getPluginDir(widget.plugin.id);
-      await VBookEngineChannel.loadSource(widget.plugin.id.hashCode, dirPath);
+    final downloadedContent = await OfflineDownloadService.instance.getDownloadedChapterContent(
+      widget.plugin.id,
+      widget.storyTitle,
+      _currentIndex,
+    );
 
-      final pagesList = await VBookEngineChannel.getPageList(widget.plugin.id.hashCode, _currentUrl);
+    if (downloadedContent != null && downloadedContent.trim().isNotEmpty) {
       if (mounted) {
         setState(() {
-          _pages = pagesList ?? [];
+          final trimmed = downloadedContent.trim();
+          if (trimmed.startsWith('[') && trimmed.endsWith(']')) {
+            try {
+              final List<dynamic> list = jsonDecode(trimmed);
+              _pages = list.asMap().entries.map((e) => Page(e.key, '', e.value.toString())).toList();
+              _isComic = true;
+            } catch (_) {
+              _content = _cleanTextContent(trimmed);
+              _isComic = false;
+            }
+          } else {
+            _content = _cleanTextContent(trimmed);
+            _isComic = false;
+          }
+          _isLoading = false;
+        });
+
+        if (_scrollController.hasClients) {
+          _scrollController.jumpTo(0);
+        }
+      }
+      return;
+    }
+
+    try {
+      final dirPath = await PluginLoader.getPluginDir(widget.plugin.id);
+      await VBookEngineChannel.loadSource(widget.plugin.id, dirPath);
+
+      final pagesList = await VBookEngineChannel.getPageList(widget.plugin.id, _currentUrl);
+      if (mounted) {
+        setState(() {
+          _pages = pagesList;
           final firstUrl = _pages.isNotEmpty ? _pages.first.imageUrl : '';
           final isImageUrl = firstUrl.startsWith('http://') ||
               firstUrl.startsWith('https://') ||
@@ -424,12 +467,16 @@ class _OnlineChapterReaderScreenState extends State<OnlineChapterReaderScreen> {
       } catch (_) {}
     }
 
+    final uri = Uri.tryParse(imgUrl);
+    final imgHost = (uri != null && uri.host.isNotEmpty) ? '${uri.scheme}://${uri.host}/' : '';
+    final referer = _currentUrl.startsWith('http')
+        ? _currentUrl
+        : (widget.plugin.source.startsWith('http') ? widget.plugin.source : imgHost);
+
     final Map<String, String> headers = {
       'User-Agent':
           'Mozilla/5.0 (Linux; Android 13; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36',
-      'Referer': widget.plugin.source.isNotEmpty && widget.plugin.source.startsWith('http')
-          ? widget.plugin.source
-          : imgUrl,
+      'Referer': referer,
     };
 
     return CachedNetworkImage(
@@ -563,6 +610,18 @@ class _OnlineChapterReaderScreenState extends State<OnlineChapterReaderScreen> {
                                             ? 'Chương này chưa có nội dung.'
                                             : HanVietTranslatorService.instance.translate(_content),
                                         style: settings.bodyTextStyle,
+                                        onSelectionSpeak: (selectedText, start, end) {
+                                          if (_content.isNotEmpty) {
+                                            final translated = HanVietTranslatorService.instance.translate(_content);
+                                            TtsService.instance.speakFromSelection(
+                                              fullText: translated,
+                                              selectedText: selectedText,
+                                              selectionStart: start,
+                                              selectionEnd: end,
+                                              onChapterComplete: _hasNext ? () => _goToChapter(_currentIndex + 1) : null,
+                                            );
+                                          }
+                                        },
                                       ),
                                       const SizedBox(height: 60),
                                       // End of Chapter indicator
@@ -881,6 +940,23 @@ class _OnlineChapterReaderScreenState extends State<OnlineChapterReaderScreen> {
                     ),
                   ),
                 ),
+              ),
+            ),
+            Positioned(
+              left: 0,
+              right: 0,
+              bottom: _showToolbars ? 110 : 10,
+              child: TtsPlayerContainer(
+                textColor: settings.textColor,
+                onPreviousChapter: _hasPrevious ? () => _goToChapter(_currentIndex - 1) : null,
+                onNextChapter: _hasNext ? () => _goToChapter(_currentIndex + 1) : null,
+                onOpenSettings: () {
+                  TtsControlSheet.show(
+                    context,
+                    textContent: _content,
+                    onNextChapter: _hasNext ? () => _goToChapter(_currentIndex + 1) : null,
+                  );
+                },
               ),
             ),
           ],

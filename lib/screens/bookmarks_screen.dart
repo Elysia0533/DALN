@@ -1,11 +1,14 @@
 import 'package:flutter/material.dart';
 import '../models/reading_progress.dart';
 import '../models/story.dart';
+import '../models/plugin_info.dart';
 import '../services/bookmark_service.dart';
 import '../services/api_service.dart';
+import '../services/extension_service.dart';
 import 'chapter_reader_screen.dart';
 import 'reading_screen.dart';
 import 'pdf_reader_screen.dart';
+import 'online_chapter_reader_screen.dart';
 
 class BookmarksScreen extends StatefulWidget {
   const BookmarksScreen({super.key});
@@ -74,9 +77,42 @@ class _BookmarksScreenState extends State<BookmarksScreen> {
     );
   }
 
-  void _openBookmark(Bookmark bookmark) {
+  Future<void> _openBookmark(Bookmark bookmark) async {
     try {
       final story = _localStories.firstWhere((s) => s.id == bookmark.storyId);
+      if (story.pluginId.isNotEmpty && story.storyUrl.isNotEmpty) {
+        final installed = await ExtensionService.getInstalledPlugins();
+        final plugin = installed.firstWhere(
+          (p) => p.id == story.pluginId,
+          orElse: () => PluginInfo(
+            id: story.pluginId,
+            name: story.pluginId,
+            version: 1,
+            author: 'vBook',
+            description: '',
+            iconUrl: '',
+            downloadUrl: '',
+            locale: 'vi',
+            source: '',
+            type: story.fileType == 'comic' ? 'comic' : 'novel',
+          ),
+        );
+        if (!mounted) return;
+        Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (context) => OnlineChapterReaderScreen(
+              plugin: plugin,
+              chapterUrl: story.storyUrl,
+              chapterTitle: bookmark.chapterTitle.isNotEmpty ? bookmark.chapterTitle : 'Chương ${bookmark.chapterIndex + 1}',
+              storyTitle: story.title,
+              currentIndex: bookmark.chapterIndex,
+            ),
+          ),
+        );
+        return;
+      }
+
       if (story.fileType == 'pdf') {
         Navigator.push(
           context,

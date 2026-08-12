@@ -5,8 +5,8 @@ class VBookEngineChannel {
   static const MethodChannel _channel = MethodChannel('com.vbook.reader/vbook_engine');
 
   /// Loads a vBook plugin from a directory on disk.
-  /// [id] should be a stable, unique identifier per plugin (e.g. plugin.id.hashCode).
-  static Future<bool> loadSource(int id, String dirPath) async {
+  /// [id] is the unique string identifier per plugin (e.g. plugin.id).
+  static Future<bool> loadSource(String id, String dirPath) async {
     try {
       print('[VBookEngine] loadSource id=$id dirPath=$dirPath');
       final res = await _channel.invokeMethod<bool>('loadSource', {
@@ -16,18 +16,15 @@ class VBookEngineChannel {
       print('[VBookEngine] loadSource result: $res');
       return res ?? false;
     } on PlatformException catch (e) {
-      print('[VBookEngine] loadSource PlatformException:');
-      print('  code: ${e.code}');
-      print('  message: ${e.message}');
-      print('  details: ${e.details}');
-      return false;
+      print('[VBookEngine] loadSource PlatformException: code=${e.code}, msg=${e.message}');
+      throw Exception(e.message ?? 'Engine load failed (${e.code})');
     } catch (e) {
       print('[VBookEngine] loadSource error: $e');
-      return false;
+      rethrow;
     }
   }
 
-  static Future<MangasPage?> getPopularManga(int id, int page) async {
+  static Future<MangasPage?> getPopularManga(String id, int page) async {
     try {
       final res = await _channel.invokeMapMethod<String, dynamic>('getPopularManga', {
         'id': id,
@@ -42,7 +39,7 @@ class VBookEngineChannel {
     return null;
   }
 
-  static Future<MangasPage?> getLatestUpdates(int id, int page) async {
+  static Future<MangasPage?> getLatestUpdates(String id, int page) async {
     try {
       final res = await _channel.invokeMapMethod<String, dynamic>('getLatestUpdates', {
         'id': id,
@@ -57,7 +54,7 @@ class VBookEngineChannel {
     return null;
   }
 
-  static Future<MangasPage?> getSearchManga(int id, String query, int page) async {
+  static Future<MangasPage?> getSearchManga(String id, String query, int page) async {
     try {
       final res = await _channel.invokeMapMethod<String, dynamic>('getSearchManga', {
         'id': id,
@@ -73,7 +70,7 @@ class VBookEngineChannel {
     return null;
   }
 
-  static Future<SManga?> getMangaDetails(int id, String url) async {
+  static Future<SManga?> getMangaDetails(String id, String url) async {
     try {
       final res = await _channel.invokeMapMethod<String, dynamic>('getMangaDetails', {
         'id': id,
@@ -98,7 +95,7 @@ class VBookEngineChannel {
     return null;
   }
 
-  static Future<List<SChapter>> getChapterList(int id, String url) async {
+  static Future<List<SChapter>> getChapterList(String id, String url) async {
     try {
       final res = await _channel.invokeListMethod<dynamic>('getChapterList', {
         'id': id,
@@ -119,7 +116,7 @@ class VBookEngineChannel {
     return [];
   }
 
-  static Future<List<Page>> getPageList(int id, String url) async {
+  static Future<List<Page>> getPageList(String id, String url) async {
     try {
       final res = await _channel.invokeListMethod<dynamic>('getPageList', {
         'id': id,
@@ -140,7 +137,7 @@ class VBookEngineChannel {
     return [];
   }
 
-  static Future<List<Map<String, String>>> getHomeTabs(int id) async {
+  static Future<List<Map<String, String>>> getHomeTabs(String id) async {
     try {
       final res = await _channel.invokeListMethod<dynamic>('getHomeTabs', {'id': id});
       if (res != null) {
@@ -159,7 +156,7 @@ class VBookEngineChannel {
     return [];
   }
 
-  static Future<MangasPage?> getMangaListByTab(int id, String input, String script, int page) async {
+  static Future<MangasPage?> getMangaListByTab(String id, String input, String script, int page) async {
     try {
       final res = await _channel.invokeMapMethod<String, dynamic>('getMangaListByTab', {
         'id': id,
@@ -176,7 +173,7 @@ class VBookEngineChannel {
     return null;
   }
 
-  static Future<void> closeSource(int id) async {
+  static Future<void> closeSource(String id) async {
     try {
       await _channel.invokeMethod('closeSource', {'id': id});
     } catch (e) {

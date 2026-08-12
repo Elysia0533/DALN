@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
 import 'dart:io';
 import '../models/story.dart';
+import '../models/plugin_info.dart';
 import '../services/api_service.dart';
+import '../services/extension_service.dart';
 import '../services/google_drive_service.dart';
 import '../utils/file_name_utils.dart';
 import 'package:path_provider/path_provider.dart';
@@ -9,6 +11,7 @@ import 'chapter_reader_screen.dart';
 import 'epub_reader_screen.dart';
 import 'pdf_reader_screen.dart';
 import 'reading_screen.dart';
+import 'online_story_detail_screen.dart';
 import '../widgets/story_cover_image.dart';
 
 class StoryDetailScreen extends StatefulWidget {
@@ -256,11 +259,40 @@ class _StoryDetailScreenState extends State<StoryDetailScreen> {
   }
 
   bool get _canReadOnline =>
-      _story.isFromDrive &&
-      _story.localPath.isEmpty &&
-      (_storyFileType == 'epub' ||
-          _storyFileType == 'pdf' ||
-          _storyFileType == 'txt');
+      (_story.isFromDrive || (_story.pluginId.isNotEmpty && _story.storyUrl.isNotEmpty)) &&
+      _story.localPath.isEmpty;
+
+  Future<void> _openExtensionOnline() async {
+    final installed = await ExtensionService.getInstalledPlugins();
+    final plugin = installed.firstWhere(
+      (p) => p.id == _story.pluginId,
+      orElse: () => PluginInfo(
+        id: _story.pluginId,
+        name: _story.pluginId,
+        version: 1,
+        author: 'vBook',
+        description: '',
+        iconUrl: '',
+        downloadUrl: '',
+        locale: 'vi',
+        source: '',
+        type: _story.fileType == 'comic' ? 'comic' : 'novel',
+      ),
+    );
+
+    if (!mounted) return;
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => OnlineStoryDetailScreen(
+          plugin: plugin,
+          storyUrl: _story.storyUrl,
+          initialTitle: _story.title,
+          initialCover: _story.iconUrl,
+        ),
+      ),
+    );
+  }
 
   Future<void> _startReading() async {
     ApiService.recordReadingHistory(
@@ -273,6 +305,10 @@ class _StoryDetailScreenState extends State<StoryDetailScreen> {
 
     final localPath = _story.localPath;
     if (localPath.isEmpty) {
+      if (_story.pluginId.isNotEmpty && _story.storyUrl.isNotEmpty) {
+        await _openExtensionOnline();
+        return;
+      }
       if (_story.isFromDrive && _story.driveFileId.isNotEmpty) {
         if (_storyFileType == 'pdf') {
           Navigator.push(

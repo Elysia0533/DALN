@@ -7,7 +7,9 @@ import 'package:provider/provider.dart';
 import 'dart:io';
 import '../models/reading_marker.dart';
 import '../models/story.dart';
+import '../models/plugin_info.dart';
 import '../services/api_service.dart';
+import '../services/extension_service.dart';
 import '../services/firebase_backend_service.dart';
 import '../theme/reading_settings_provider.dart';
 import '../theme/theme_provider.dart';
@@ -15,6 +17,7 @@ import '../theme/user_provider.dart';
 import 'community_screen.dart';
 import 'explore_screen.dart';
 import 'story_detail_screen.dart';
+import 'online_story_detail_screen.dart';
 
 class ProfileScreen extends StatelessWidget {
   const ProfileScreen({super.key});
@@ -980,7 +983,7 @@ class ProfileScreen extends StatelessWidget {
     Clipboard.setData(
       const ClipboardData(
         text:
-            'Mình đang dùng vBook để đọc EPUB/PDF/TXT, tải truyện offline và nghe truyện bằng TTS.',
+            'Link download: https://drive.google.com/drive/folders/101N2n4Qp4hDPREdzPYRsztyPdtbgM3k0?usp=drive_link',
       ),
     );
     ScaffoldMessenger.of(context).showSnackBar(
@@ -1336,8 +1339,38 @@ class ProfileScreen extends StatelessWidget {
                     overflow: TextOverflow.ellipsis,
                   ),
                   trailing: const Icon(Icons.chevron_right_rounded),
-                  onTap: () {
+                  onTap: () async {
                     Navigator.pop(ctx);
+                    if (story.pluginId.isNotEmpty && story.storyUrl.isNotEmpty) {
+                      final installed = await ExtensionService.getInstalledPlugins();
+                      final plugin = installed.firstWhere(
+                        (p) => p.id == story.pluginId,
+                        orElse: () => PluginInfo(
+                          id: story.pluginId,
+                          name: story.pluginId,
+                          version: 1,
+                          author: 'vBook',
+                          description: '',
+                          iconUrl: '',
+                          downloadUrl: '',
+                          locale: 'vi',
+                          source: '',
+                          type: story.fileType == 'comic' ? 'comic' : 'novel',
+                        ),
+                      );
+                      if (!context.mounted) return;
+                      Navigator.of(context).push(
+                        MaterialPageRoute(
+                          builder: (_) => OnlineStoryDetailScreen(
+                            plugin: plugin,
+                            storyUrl: story.storyUrl,
+                            initialTitle: story.title,
+                            initialCover: story.iconUrl,
+                          ),
+                        ),
+                      );
+                      return;
+                    }
                     Navigator.of(context).push(
                       MaterialPageRoute(
                         builder: (_) => StoryDetailScreen(story: story),

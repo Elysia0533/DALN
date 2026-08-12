@@ -114,7 +114,7 @@ class _SourceBrowseScreenState extends State<SourceBrowseScreen> {
 
     print('[SourceBrowse] Loading engine with path: $effectiveDirPath');
 
-    final success = await VBookEngineChannel.loadSource(plugin.id.hashCode, effectiveDirPath);
+    final success = await VBookEngineChannel.loadSource(plugin.id, effectiveDirPath);
     if (!success) {
       throw Exception('Engine load failed for ${plugin.id}. Check logcat for details.');
     }
@@ -136,7 +136,7 @@ class _SourceBrowseScreenState extends State<SourceBrowseScreen> {
       await _ensurePluginLoaded(_currentPlugin);
 
       if (_dynamicTabs.isEmpty) {
-        final tabs = await VBookEngineChannel.getHomeTabs(_currentPlugin.id.hashCode);
+        final tabs = await VBookEngineChannel.getHomeTabs(_currentPlugin.id);
         if (tabs.isNotEmpty) {
           _dynamicTabs = tabs;
         }
@@ -146,20 +146,20 @@ class _SourceBrowseScreenState extends State<SourceBrowseScreen> {
       if (_dynamicTabs.isNotEmpty && targetTab < _dynamicTabs.length) {
         final tab = _dynamicTabs[targetTab];
         page = await VBookEngineChannel.getMangaListByTab(
-          _currentPlugin.id.hashCode,
+          _currentPlugin.id,
           tab['input'] ?? '',
           tab['script'] ?? 'gen.js',
           1,
         );
       } else if (targetTab == 0) {
         // Thử lấy danh sách mới cập nhật trước
-        page = await VBookEngineChannel.getLatestUpdates(_currentPlugin.id.hashCode, 1);
+        page = await VBookEngineChannel.getLatestUpdates(_currentPlugin.id, 1);
         // Nếu kết quả rỗng, fallback sang popular
         if (page == null || page.mangas.isEmpty) {
-          page = await VBookEngineChannel.getPopularManga(_currentPlugin.id.hashCode, 1);
+          page = await VBookEngineChannel.getPopularManga(_currentPlugin.id, 1);
         }
       } else {
-        page = await VBookEngineChannel.getPopularManga(_currentPlugin.id.hashCode, 1);
+        page = await VBookEngineChannel.getPopularManga(_currentPlugin.id, 1);
       }
 
       if (mounted) {
@@ -188,25 +188,25 @@ class _SourceBrowseScreenState extends State<SourceBrowseScreen> {
       MangasPage? page;
       if (_currentSearchQuery.isNotEmpty) {
         page = await VBookEngineChannel.getSearchManga(
-            _currentPlugin.id.hashCode, _currentSearchQuery, nextPage);
+            _currentPlugin.id, _currentSearchQuery, nextPage);
       } else if (_dynamicTabs.isNotEmpty && _selectedTab < _dynamicTabs.length) {
         final tab = _dynamicTabs[_selectedTab];
         page = await VBookEngineChannel.getMangaListByTab(
-          _currentPlugin.id.hashCode,
+          _currentPlugin.id,
           tab['input'] ?? '',
           tab['script'] ?? 'gen.js',
           nextPage,
         );
       } else if (_selectedTab == 0) {
         page = await VBookEngineChannel.getLatestUpdates(
-            _currentPlugin.id.hashCode, nextPage);
+            _currentPlugin.id, nextPage);
         if (page == null || page.mangas.isEmpty) {
           page = await VBookEngineChannel.getPopularManga(
-              _currentPlugin.id.hashCode, nextPage);
+              _currentPlugin.id, nextPage);
         }
       } else {
         page = await VBookEngineChannel.getPopularManga(
-            _currentPlugin.id.hashCode, nextPage);
+            _currentPlugin.id, nextPage);
       }
 
       if (mounted) {
@@ -239,7 +239,7 @@ class _SourceBrowseScreenState extends State<SourceBrowseScreen> {
     try {
       await _ensurePluginLoaded(_currentPlugin);
       final page = await VBookEngineChannel.getSearchManga(
-          _currentPlugin.id.hashCode, query.trim(), 1);
+          _currentPlugin.id, query.trim(), 1);
       if (mounted) {
         setState(() {
           _stories = page?.mangas ?? [];

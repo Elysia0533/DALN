@@ -1,8 +1,7 @@
-import 'dart:async';
-
 import 'package:flutter/material.dart';
-
+import '../utils/app_performance_logger.dart';
 import 'home_screen.dart';
+
 
 class SplashScreen extends StatefulWidget {
   const SplashScreen({super.key});
@@ -15,8 +14,9 @@ class _SplashScreenState extends State<SplashScreen> {
   @override
   void initState() {
     super.initState();
-    Timer(const Duration(milliseconds: 1200), () {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
+      AppPerformanceLogger.log('SplashScreen first frame rendered -> Transitioning to HomeScreen');
       Navigator.of(
         context,
       ).pushReplacement(MaterialPageRoute(builder: (_) => const HomeScreen()));

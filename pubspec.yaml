@@ -37,6 +37,7 @@ dependencies:
   flutter_js: ^0.8.2
   xml: ^6.6.1
   webview_flutter: ^4.14.1
+  crypto: ^3.0.7
 
 dev_dependencies:
   flutter_test:

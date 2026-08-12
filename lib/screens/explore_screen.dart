@@ -9,8 +9,12 @@ import '../models/plugin_info.dart';
 import '../theme/user_provider.dart';
 import '../widgets/app_state_widgets.dart';
 import '../widgets/story_cover_image.dart';
+import '../services/google_drive_service.dart';
+import '../utils/app_performance_logger.dart';
 import 'source_browse_screen.dart';
+
 import 'story_detail_screen.dart';
+import 'online_story_detail_screen.dart';
 import 'extension_screen.dart';
 
 class ExploreScreen extends StatefulWidget {
@@ -22,7 +26,13 @@ class ExploreScreen extends StatefulWidget {
 
 class _ExploreScreenState extends State<ExploreScreen> {
   List<Story> _serverStories = [];
+  final Set<String> _seenStoryIds = {};
+  String? _nextPageToken;
+  bool _hasMore = true;
+
   bool _isLoading = true;
+  bool _isLoadingMore = false;
+  Object? _loadMoreError;
   bool _isSearching = false;
   bool _isEnrichingMetadata = false;
   String? _loadError;
@@ -50,10 +60,30 @@ class _ExploreScreenState extends State<ExploreScreen> {
     setState(() {
       _isLoading = true;
       _loadError = null;
+      _loadMoreError = null;
+      _serverStories = [];
+      _seenStoryIds.clear();
+      _nextPageToken = null;
+      _hasMore = true;
     });
+    AppPerformanceLogger.log('[PERF][EXPLORE] Initial page start');
+    final stopwatch = Stopwatch()..start();
+
     try {
-      _serverStories = await ApiService.fetchServerStories();
+      final drivePage = await GoogleDriveService.fetchStoriesPage(pageSize: 50);
+      for (final story in drivePage.items) {
+        final id = story.driveFileId.isNotEmpty ? story.driveFileId : story.id;
+        if (_seenStoryIds.add(id)) {
+          _serverStories.add(story);
+        }
+      }
+      _nextPageToken = drivePage.nextPageToken;
+      _hasMore = drivePage.hasMore;
       _buildGenreList();
+      stopwatch.stop();
+      AppPerformanceLogger.log(
+        '[PERF][EXPLORE] Initial page complete: count=${_serverStories.length}, duration=${stopwatch.elapsedMilliseconds}ms, hasMore=$_hasMore',
+      );
     } catch (e) {
       _serverStories = [];
       _allGenres = ['Tất cả'];
@@ -70,31 +100,55 @@ class _ExploreScreenState extends State<ExploreScreen> {
     }
   }
 
-  Future<void> _refreshServerStories() async {
+  Future<void> _loadNextPage() async {
+    if (_isLoadingMore || !_hasMore) return;
     setState(() {
-      _isLoading = true;
-      _loadError = null;
+      _isLoadingMore = true;
+      _loadMoreError = null;
     });
+    AppPerformanceLogger.log('[PERF][EXPLORE] Next page start: pageToken=$_nextPageToken');
+    final stopwatch = Stopwatch()..start();
+
     try {
-      _serverStories = await ApiService.refreshServerStories();
+      final drivePage = await GoogleDriveService.fetchStoriesPage(
+        pageSize: 50,
+        pageToken: _nextPageToken,
+      );
+
+      int addedCount = 0;
+      for (final story in drivePage.items) {
+        final id = story.driveFileId.isNotEmpty ? story.driveFileId : story.id;
+        if (_seenStoryIds.add(id)) {
+          _serverStories.add(story);
+          addedCount++;
+        }
+      }
+      _nextPageToken = drivePage.nextPageToken;
+      _hasMore = drivePage.hasMore;
       _buildGenreList();
-      _loadError = null;
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Đã làm mới danh sách truyện!')),
-        );
-      }
+      stopwatch.stop();
+      AppPerformanceLogger.log(
+        '[PERF][EXPLORE] Next page complete: added=$addedCount, total=${_serverStories.length}, duration=${stopwatch.elapsedMilliseconds}ms, hasMore=$_hasMore',
+      );
     } catch (e) {
+      _loadMoreError = e;
+      AppPerformanceLogger.log('[PERF][EXPLORE] Page load error: $e');
+    } finally {
       if (mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text('Lỗi làm mới: $e')));
+        setState(() {
+          _isLoadingMore = false;
+        });
       }
-      _loadError = _formatLoadError(e);
     }
-    if (mounted) {
-      setState(() => _isLoading = false);
-      unawaited(_enrichMissingDriveMetadata());
+  }
+
+  Future<void> _refreshServerStories() async {
+    AppPerformanceLogger.log('[PERF][EXPLORE] Refresh page start');
+    await _loadServerStories();
+    if (mounted && _loadError == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Đã làm mới danh sách truyện!')),
+      );
     }
   }
 
@@ -148,7 +202,9 @@ class _ExploreScreenState extends State<ExploreScreen> {
 
   void _toggleGenre(String genre) {
     if (genre == _allGenres.first) {
-      setState(_selectedGenres.clear);
+      setState(() {
+        _selectedGenres.clear();
+      });
       return;
     }
 
@@ -418,7 +474,9 @@ class _ExploreScreenState extends State<ExploreScreen> {
                   hintStyle: TextStyle(color: colorScheme.onSurfaceVariant),
                 ),
                 style: TextStyle(color: colorScheme.onSurface, fontSize: 16),
-                onChanged: (value) => setState(() => _searchQuery = value),
+                onChanged: (value) => setState(() {
+                  _searchQuery = value;
+                }),
               )
             : Row(
                 children: [
@@ -500,39 +558,51 @@ class _ExploreScreenState extends State<ExploreScreen> {
       ),
       body: _isLoading
           ? const AppLoadingState(message: 'Đang tải danh sách truyện...')
-          : _loadError != null && _serverStories.isEmpty
-          ? _buildLoadErrorState()
-          : CustomScrollView(
-              physics: const BouncingScrollPhysics(),
-              slivers: [
-                SliverToBoxAdapter(
-                  child: _buildSourceDashboard(
-                    isDark: isDark,
-                    accentColor: accentColor,
-                    isAdmin: userProvider.isAdmin,
-                  ),
-                ),
-                SliverToBoxAdapter(
-                  child: _buildOnlineSourceSection(isDark: isDark, accentColor: accentColor),
-                ),
-                if (_allGenres.length > 1)
+          : NotificationListener<ScrollNotification>(
+              onNotification: (scrollInfo) {
+                if (scrollInfo.metrics.pixels >=
+                    scrollInfo.metrics.maxScrollExtent - 300) {
+                  if (!_isLoadingMore && _hasMore && _loadMoreError == null) {
+                    _loadNextPage();
+                  }
+                }
+                return false;
+              },
+              child: CustomScrollView(
+                physics: const BouncingScrollPhysics(),
+                slivers: [
                   SliverToBoxAdapter(
-                    child: _GenreChipBar(
-                      genres: _allGenres,
-                      selectedGenres: _selectedGenres,
-                      accentColor: accentColor,
+                    child: _buildSourceDashboard(
                       isDark: isDark,
-                      onSelect: _toggleGenre,
+                      accentColor: accentColor,
+                      isAdmin: userProvider.isAdmin,
                     ),
                   ),
-                SliverToBoxAdapter(
-                  child: Padding(
-                    padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
-                    child: _buildResultHeader(isDark, accentColor),
+                  SliverToBoxAdapter(
+                    child: _buildOnlineSourceSection(
+                      isDark: isDark,
+                      accentColor: accentColor,
+                    ),
                   ),
-                ),
-                _buildSliverStoryGrid(isDark),
-              ],
+                  if (_allGenres.length > 1)
+                    SliverToBoxAdapter(
+                      child: _GenreChipBar(
+                        genres: _allGenres,
+                        selectedGenres: _selectedGenres,
+                        accentColor: accentColor,
+                        isDark: isDark,
+                        onSelect: _toggleGenre,
+                      ),
+                    ),
+                  SliverToBoxAdapter(
+                    child: Padding(
+                      padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
+                      child: _buildResultHeader(isDark, accentColor),
+                    ),
+                  ),
+                  ..._buildSliverStoryGrid(isDark),
+                ],
+              ),
             ),
     );
   }
@@ -948,40 +1018,119 @@ class _ExploreScreenState extends State<ExploreScreen> {
     );
   }
 
-  Widget _buildSliverStoryGrid(bool isDark) {
+  List<Widget> _buildSliverStoryGrid(bool isDark) {
     final stories = _displayStories;
 
-    if (stories.isEmpty) {
-      return SliverFillRemaining(
-        hasScrollBody: false,
-        child: AppEmptyState(
-          icon: Icons.search_off_rounded,
-          title: 'Không tìm thấy truyện',
-          message: _searchQuery.isNotEmpty
-              ? 'Thử tìm bằng tên truyện, tác giả hoặc bỏ bớt bộ lọc.'
-              : 'Thể loại này hiện chưa có truyện trong danh sách.',
+    if (_loadError != null && _serverStories.isEmpty) {
+      return [
+        SliverFillRemaining(
+          hasScrollBody: false,
+          child: _buildLoadErrorState(),
         ),
-      );
+      ];
     }
 
-    return SliverPadding(
-      padding: const EdgeInsets.fromLTRB(16, 4, 16, 24),
-      sliver: SliverGrid(
-        gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-          crossAxisCount: 3,
-          childAspectRatio: 0.50,
-          crossAxisSpacing: 12,
-          mainAxisSpacing: 16,
+    if (stories.isEmpty) {
+      return [
+        SliverFillRemaining(
+          hasScrollBody: false,
+          child: AppEmptyState(
+            icon: Icons.search_off_rounded,
+            title: 'Không tìm thấy truyện',
+            message: _searchQuery.isNotEmpty
+                ? 'Thử tìm bằng tên truyện, tác giả hoặc bỏ bớt bộ lọc.'
+                : 'Thể loại này hiện chưa có truyện trong danh sách.',
+          ),
         ),
-        delegate: SliverChildBuilderDelegate(
-          (context, index) {
-            final story = stories[index];
-            return _StoryCard(story: story, isDark: isDark);
-          },
-          childCount: stories.length,
+      ];
+    }
+
+    return [
+      SliverPadding(
+        padding: const EdgeInsets.fromLTRB(16, 4, 16, 16),
+        sliver: SliverGrid(
+          gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+            crossAxisCount: 3,
+            childAspectRatio: 0.50,
+            crossAxisSpacing: 12,
+            mainAxisSpacing: 16,
+          ),
+          delegate: SliverChildBuilderDelegate(
+            (context, index) {
+              final story = stories[index];
+              return _StoryCard(
+                key: ValueKey(story.driveFileId.isNotEmpty ? story.driveFileId : story.id),
+                story: story,
+                isDark: isDark,
+              );
+            },
+            childCount: stories.length,
+          ),
         ),
       ),
-    );
+      if (_isLoadingMore)
+        SliverToBoxAdapter(
+          child: Padding(
+            padding: const EdgeInsets.only(bottom: 24, top: 4),
+            child: Center(
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                decoration: BoxDecoration(
+                  color: Theme.of(context).colorScheme.surfaceContainerHighest.withValues(alpha: 0.6),
+                  borderRadius: BorderRadius.circular(20),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const SizedBox(
+                      width: 14,
+                      height: 14,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    ),
+                    const SizedBox(width: 10),
+                    Text(
+                      'Đang tải thêm truyện từ Drive...',
+                      style: TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
+                        color: Theme.of(context).colorScheme.onSurfaceVariant,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        )
+      else if (_loadMoreError != null)
+        SliverToBoxAdapter(
+          child: Padding(
+            padding: const EdgeInsets.only(bottom: 24, top: 4),
+            child: Center(
+              child: TextButton.icon(
+                onPressed: _loadNextPage,
+                icon: const Icon(Icons.refresh_rounded, size: 16),
+                label: const Text('Không tải được thêm. Thử lại'),
+              ),
+            ),
+          ),
+        )
+      else if (!_hasMore && stories.isNotEmpty)
+        SliverToBoxAdapter(
+          child: Padding(
+            padding: const EdgeInsets.only(bottom: 24, top: 8),
+            child: Center(
+              child: Text(
+                'Đã tải hết danh sách truyện',
+                style: TextStyle(
+                  fontSize: 12,
+                  color: Theme.of(context).colorScheme.onSurfaceVariant,
+                ),
+              ),
+            ),
+          ),
+        ),
+    ];
   }
 }
 
@@ -1130,7 +1279,7 @@ class _StoryCard extends StatelessWidget {
   final Story story;
   final bool isDark;
 
-  const _StoryCard({required this.story, required this.isDark});
+  const _StoryCard({super.key, required this.story, required this.isDark});
 
   @override
   Widget build(BuildContext context) {
@@ -1141,7 +1290,38 @@ class _StoryCard extends StatelessWidget {
         : type;
 
     return GestureDetector(
-      onTap: () {
+      onTap: () async {
+        if (story.pluginId.isNotEmpty && story.storyUrl.isNotEmpty) {
+          final installed = await ExtensionService.getInstalledPlugins();
+          final plugin = installed.firstWhere(
+            (p) => p.id == story.pluginId,
+            orElse: () => PluginInfo(
+              id: story.pluginId,
+              name: story.pluginId,
+              version: 1,
+              author: 'vBook',
+              description: '',
+              iconUrl: '',
+              downloadUrl: '',
+              locale: 'vi',
+              source: '',
+              type: story.fileType == 'comic' ? 'comic' : 'novel',
+            ),
+          );
+          if (!context.mounted) return;
+          Navigator.push(
+            context,
+            MaterialPageRoute(
+              builder: (_) => OnlineStoryDetailScreen(
+                plugin: plugin,
+                storyUrl: story.storyUrl,
+                initialTitle: story.title,
+                initialCover: story.iconUrl,
+              ),
+            ),
+          );
+          return;
+        }
         Navigator.push(
           context,
           MaterialPageRoute(builder: (_) => StoryDetailScreen(story: story)),

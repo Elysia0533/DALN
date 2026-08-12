@@ -270,6 +270,12 @@ class FirebaseBackendService {
     if (text.trim().isEmpty && attachmentPath.trim().isEmpty) {
       throw Exception('Tin nhắn hoặc tệp đính kèm không được để trống.');
     }
+    if (attachmentPath.trim().isNotEmpty) {
+      throw Exception(
+        'Tin nhắn đính kèm trên cộng đồng đám mây chưa được hỗ trợ. '
+        'Vui lòng gửi tin nhắn văn bản.',
+      );
+    }
 
     final data = {
       'userId': appUser.id,
@@ -278,11 +284,6 @@ class FirebaseBackendService {
       'text': text.trim(),
       'createdAt': FieldValue.serverTimestamp(),
     };
-    if (attachmentPath.trim().isNotEmpty) {
-      data['attachmentType'] = attachmentType.trim();
-      data['attachmentPath'] = attachmentPath.trim();
-    }
-
     final ref = await _db.collection('community_messages').add(data);
     final doc = await ref.get();
     return _messageFromDoc(doc);

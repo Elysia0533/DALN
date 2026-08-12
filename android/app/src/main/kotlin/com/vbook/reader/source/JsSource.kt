@@ -80,25 +80,33 @@ class JsSource(
      * Ưu tiên: fallback[0] > link > url > src > image > data-original
      */
     private fun extractImageUrlFromElement(element: kotlinx.serialization.json.JsonElement): String {
-        return when (element) {
+        var rawUrl = when (element) {
             is JsonPrimitive -> element.content.takeIf { it.isNotBlank() } ?: ""
             is JsonObject -> {
-                // Ưu tiên fallback[0] (TruyenQQ dùng field này cho real URL)
-                val fallback = element["fallback"] as? JsonArray
-                val fallbackUrl = fallback?.firstOrNull()?.let {
-                    (it as? JsonPrimitive)?.content?.takeIf { url -> url.isNotBlank() }
-                }
-                if (!fallbackUrl.isNullOrBlank()) return fallbackUrl
-
+                var found = ""
                 // Thứ tự ưu tiên field tên ảnh
                 for (key in listOf("url", "src", "image", "link", "data-original", "path", "img", "imageUrl")) {
                     val v = element[key]?.stringValue()
-                    if (!v.isNullOrBlank()) return v
+                    if (!v.isNullOrBlank()) {
+                        found = v
+                        break
+                    }
                 }
-                ""
+                if (found.isBlank()) {
+                    val fallback = element["fallback"] as? JsonArray
+                    val fallbackUrl = fallback?.firstOrNull()?.let {
+                        (it as? JsonPrimitive)?.content?.takeIf { url -> url.isNotBlank() }
+                    }
+                    if (!fallbackUrl.isNullOrBlank()) found = fallbackUrl
+                }
+                found
             }
             else -> ""
         }
+        if (rawUrl.startsWith("//")) {
+            rawUrl = "https:$rawUrl"
+        }
+        return rawUrl
     }
 
     /**
@@ -166,6 +174,9 @@ class JsSource(
             val data = jsonResult["data"]?.jsonObject ?: return manga
 
             manga.apply {
+                val parsedTitle = data["name"]?.stringValue() ?: data["title"]?.stringValue()
+                if (!parsedTitle.isNullOrBlank()) title = parsedTitle
+
                 val parsedAuthor = data["author"]?.stringValue()
                 if (!parsedAuthor.isNullOrBlank()) author = parsedAuthor
                 

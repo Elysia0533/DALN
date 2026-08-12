@@ -56,9 +56,9 @@ class _OnlineStoryDetailScreenState extends State<OnlineStoryDetailScreen> {
 
     try {
       final dirPath = await PluginLoader.getPluginDir(widget.plugin.id);
-      await VBookEngineChannel.loadSource(widget.plugin.id.hashCode, dirPath);
+      await VBookEngineChannel.loadSource(widget.plugin.id, dirPath);
 
-      final detail = await VBookEngineChannel.getMangaDetails(widget.plugin.id.hashCode, widget.storyUrl);
+      final detail = await VBookEngineChannel.getMangaDetails(widget.plugin.id, widget.storyUrl);
       if (mounted) {
         setState(() {
           _detail = detail;
@@ -66,7 +66,7 @@ class _OnlineStoryDetailScreenState extends State<OnlineStoryDetailScreen> {
         });
       }
 
-      final chapterData = await VBookEngineChannel.getChapterList(widget.plugin.id.hashCode, widget.storyUrl);
+      final chapterData = await VBookEngineChannel.getChapterList(widget.plugin.id, widget.storyUrl);
       if (mounted) {
         setState(() {
           _chapters = chapterData;
@@ -97,10 +97,10 @@ class _OnlineStoryDetailScreenState extends State<OnlineStoryDetailScreen> {
     setState(() => _isAddingToLibrary = true);
 
     try {
-      final title = _detail?.title ?? widget.initialTitle;
-      final cover = _detail?.thumbnailUrl ?? widget.initialCover;
-      final author = _detail?.author ?? '';
-      final desc = _detail?.description ?? '';
+      final title = (_detail?.title.trim().isNotEmpty == true) ? _detail!.title : widget.initialTitle;
+      final cover = (_detail?.thumbnailUrl.trim().isNotEmpty == true) ? _detail!.thumbnailUrl : widget.initialCover;
+      final author = (_detail?.author.trim().isNotEmpty == true) ? _detail!.author : '';
+      final desc = (_detail?.description.trim().isNotEmpty == true) ? _detail!.description : '';
       final genres = (_detail?.genre ?? '')
           .split(',')
           .map((g) => g.trim())
@@ -405,10 +405,10 @@ class _OnlineStoryDetailScreenState extends State<OnlineStoryDetailScreen> {
   @override
   Widget build(BuildContext context) {
     final colorScheme = Theme.of(context).colorScheme;
-    final title = _detail?.title ?? widget.initialTitle;
-    final cover = _detail?.thumbnailUrl ?? widget.initialCover;
-    final author = _detail?.author ?? 'Đang cập nhật';
-    final desc = _detail?.description ?? 'Đang cập nhật...';
+    final title = (_detail?.title.trim().isNotEmpty == true) ? _detail!.title : widget.initialTitle;
+    final cover = (_detail?.thumbnailUrl.trim().isNotEmpty == true) ? _detail!.thumbnailUrl : widget.initialCover;
+    final author = (_detail?.author.trim().isNotEmpty == true) ? _detail!.author : 'Đang cập nhật';
+    final desc = (_detail?.description.trim().isNotEmpty == true) ? _detail!.description : 'Đang cập nhật...';
     final status = _detail?.status ?? SManga.UNKNOWN;
     final statusText = status == SManga.ONGOING
         ? 'Đang tiến hành'
@@ -586,6 +586,7 @@ class _OnlineStoryDetailScreenState extends State<OnlineStoryDetailScreen> {
                                               chapterTitle: _chapters.first.name.isNotEmpty
                                                   ? _chapters.first.name
                                                   : 'Chương 1',
+                                              storyTitle: _detail?.title ?? widget.initialTitle,
                                               allChapters: _buildChapterNavList(),
                                               currentIndex: 0,
                                             ),
@@ -676,6 +677,7 @@ class _OnlineStoryDetailScreenState extends State<OnlineStoryDetailScreen> {
                                   chapterTitle: chapter.name.isNotEmpty
                                       ? chapter.name
                                       : 'Chương ${index + 1}',
+                                  storyTitle: _detail?.title ?? widget.initialTitle,
                                   allChapters: _buildChapterNavList(),
                                   currentIndex: index,
                                 ),

@@ -2,29 +2,48 @@ rules_version = '2';
 
 service cloud.firestore {
   match /databases/{database}/documents {
-    function signedIn() {
+    function isSignedIn() {
       return request.auth != null;
     }
 
-    function isOwner(userId) {
-      return signedIn() && request.auth.uid == userId;
+    function isOwner(uid) {
+      return isSignedIn() && request.auth.uid == uid;
     }
 
     function isVerified() {
-      return signedIn() && request.auth.token.email_verified == true;
+      return isSignedIn() && request.auth.token.email_verified == true;
     }
 
     function isAdmin() {
-      return signedIn()
-        && request.auth.token.email in [
-          'vglduc25@gmail.com'
-        ];
+      return isSignedIn() && request.auth.token.admin == true;
     }
 
-    match /users/{userId} {
-      allow read: if isOwner(userId) || isAdmin();
-      allow create: if isOwner(userId)
-        && request.resource.data.keys().hasOnly([
+    function hasOnlyAllowedFields(data, fields) {
+      return data.keys().hasOnly(fields);
+    }
+
+    function isNonEmptyString(value, maxLength) {
+      return value is string
+        && value.size() > 0
+        && value.size() <= maxLength
+        && value.matches('.*\\S.*');
+    }
+
+    function isServerTimestampOnCreate(data, field) {
+      return data[field] is timestamp && data[field] == request.time;
+    }
+
+    function isServerTimestampOnUpdate(data, field) {
+      return !request.resource.data.diff(resource.data).affectedKeys().hasAny([field])
+        || (data[field] is timestamp && data[field] == request.time);
+    }
+
+    function isOptionalTimestamp(data, field) {
+      return !data.keys().hasAny([field]) || data[field] is timestamp;
+    }
+
+    function isValidUserDocument(data) {
+      return hasOnlyAllowedFields(data, [
           'uid',
           'email',
           'displayName',
@@ -34,40 +53,222 @@ service cloud.firestore {
           'createdAt',
           'updatedAt'
         ])
+        && data.keys().hasAll([
+          'uid',
+          'email',
+          'displayName',
+          'avatarUrl',
+          'role',
+          'emailVerified',
+          'updatedAt'
+        ])
+        && data.uid is string
+        && data.uid.size() > 0
+        && data.email is string
+        && data.email.size() > 0
+        && data.email.size() <= 320
+        && isNonEmptyString(data.displayName, 30)
+        && data.avatarUrl is string
+        && data.avatarUrl.size() <= 500
+        && data.role in ['user', 'admin']
+        && data.emailVerified is bool
+        && data.updatedAt is timestamp
+        && isOptionalTimestamp(data, 'createdAt');
+    }
+
+    function isValidUserCreate(uid) {
+      return isOwner(uid)
+        && isValidUserDocument(request.resource.data)
         && request.resource.data.uid == request.auth.uid
         && request.resource.data.email == request.auth.token.email
-        && request.resource.data.role in ['user', 'admin']
-        && (request.resource.data.role == 'user' || isAdmin());
-      allow update: if isOwner(userId)
-        && request.resource.data.diff(resource.data).affectedKeys()
-          .hasOnly([
-            'displayName',
-            'avatarUrl',
-            'emailVerified',
-            'updatedAt',
-            'role'
-          ])
-        && request.resource.data.role == resource.data.role;
+        && request.resource.data.role == 'user'
+        && request.resource.data.emailVerified == request.auth.token.email_verified
+        && isServerTimestampOnCreate(request.resource.data, 'createdAt')
+        && isServerTimestampOnCreate(request.resource.data, 'updatedAt');
+    }
+
+    function isValidUserUpdate(uid) {
+      return isOwner(uid)
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'displayName',
+          'avatarUrl',
+          'emailVerified',
+          'updatedAt'
+        ])
+        && isValidUserDocument(request.resource.data)
+        && request.resource.data.uid == resource.data.uid
+        && request.resource.data.email == resource.data.email
+        && request.resource.data.role == resource.data.role
+        && request.resource.data.createdAt == resource.data.createdAt
+        && request.resource.data.emailVerified == request.auth.token.email_verified
+        && isServerTimestampOnUpdate(request.resource.data, 'updatedAt');
+    }
+
+    function isValidLibraryDocument(data, storyId) {
+      return hasOnlyAllowedFields(data, [
+          'storyId',
+          'story',
+          'savedChapterIndex',
+          'totalChapters',
+          'scrollOffset',
+          'createdAt',
+          'updatedAt',
+          'lastReadAt'
+        ])
+        && data.keys().hasAll([
+          'storyId',
+          'story',
+          'savedChapterIndex',
+          'totalChapters',
+          'scrollOffset',
+          'updatedAt'
+        ])
+        && data.storyId is string
+        && data.storyId == storyId
+        && data.story is map
+        && data.savedChapterIndex is int
+        && data.savedChapterIndex >= 0
+        && data.totalChapters is int
+        && data.totalChapters >= 0
+        && data.scrollOffset is number
+        && data.scrollOffset >= 0
+        && data.updatedAt is timestamp
+        && isOptionalTimestamp(data, 'createdAt')
+        && isOptionalTimestamp(data, 'lastReadAt');
+    }
+
+    function isValidLibraryCreate(storyId) {
+      return isValidLibraryDocument(request.resource.data, storyId)
+        && isServerTimestampOnCreate(request.resource.data, 'updatedAt')
+        && (!request.resource.data.keys().hasAny(['createdAt'])
+          || isServerTimestampOnCreate(request.resource.data, 'createdAt'))
+        && (!request.resource.data.keys().hasAny(['lastReadAt'])
+          || isServerTimestampOnCreate(request.resource.data, 'lastReadAt'));
+    }
+
+    function isValidLibraryUpdate(storyId) {
+      return isValidLibraryDocument(request.resource.data, storyId)
+        && request.resource.data.storyId == resource.data.storyId
+        && (!request.resource.data.diff(resource.data).affectedKeys().hasAny(['createdAt'])
+          || request.resource.data.createdAt == resource.data.createdAt)
+        && isServerTimestampOnUpdate(request.resource.data, 'updatedAt')
+        && isServerTimestampOnUpdate(request.resource.data, 'lastReadAt');
+    }
+
+    function isValidBookmarkDocument(data, bookmarkId) {
+      return hasOnlyAllowedFields(data, [
+          'id',
+          'storyId',
+          'storyTitle',
+          'chapterTitle',
+          'iconUrl',
+          'driveFileId',
+          'fileType',
+          'localPath',
+          'chapterIndex',
+          'paragraphIndex',
+          'snippet',
+          'scrollOffset',
+          'createdAt',
+          'updatedAt'
+        ])
+        && data.keys().hasAll([
+          'id',
+          'storyId',
+          'storyTitle',
+          'chapterTitle',
+          'iconUrl',
+          'driveFileId',
+          'fileType',
+          'localPath',
+          'chapterIndex',
+          'paragraphIndex',
+          'snippet',
+          'scrollOffset',
+          'createdAt',
+          'updatedAt'
+        ])
+        && data.id is string
+        && data.id == bookmarkId
+        && isNonEmptyString(data.storyId, 200)
+        && isNonEmptyString(data.storyTitle, 300)
+        && data.chapterTitle is string
+        && data.chapterTitle.size() <= 300
+        && data.iconUrl is string
+        && data.iconUrl.size() <= 1000
+        && data.driveFileId is string
+        && data.driveFileId.size() <= 300
+        && data.fileType is string
+        && data.fileType.size() <= 50
+        && data.localPath is string
+        && data.localPath.size() <= 1000
+        && data.chapterIndex is int
+        && data.chapterIndex >= 0
+        && data.paragraphIndex is int
+        && data.paragraphIndex >= 0
+        && data.snippet is string
+        && data.snippet.size() <= 2000
+        && data.scrollOffset is number
+        && data.scrollOffset >= 0
+        && data.createdAt is string
+        && data.createdAt.size() > 0
+        && data.createdAt.size() <= 64
+        && data.updatedAt is string
+        && data.updatedAt.size() > 0
+        && data.updatedAt.size() <= 64;
+    }
+
+    function isValidCommunityCreate() {
+      return isVerified()
+        && hasOnlyAllowedFields(request.resource.data, [
+          'userId',
+          'displayName',
+          'avatarUrl',
+          'text',
+          'createdAt'
+        ])
+        && request.resource.data.keys().hasAll([
+          'userId',
+          'displayName',
+          'avatarUrl',
+          'text',
+          'createdAt'
+        ])
+        && request.resource.data.userId is string
+        && request.resource.data.userId == request.auth.uid
+        && isNonEmptyString(request.resource.data.displayName, 30)
+        && request.resource.data.avatarUrl is string
+        && request.resource.data.avatarUrl.size() <= 500
+        && isNonEmptyString(request.resource.data.text, 1000)
+        && isServerTimestampOnCreate(request.resource.data, 'createdAt');
+    }
+
+    match /users/{userId} {
+      allow read: if isOwner(userId) || isAdmin();
+      allow create: if isValidUserCreate(userId);
+      allow update: if isValidUserUpdate(userId);
       allow delete: if isAdmin();
 
       match /library/{storyId} {
-        allow read, write: if isOwner(userId);
+        allow read: if isOwner(userId);
+        allow create: if isOwner(userId) && isValidLibraryCreate(storyId);
+        allow update: if isOwner(userId) && isValidLibraryUpdate(storyId);
+        allow delete: if isOwner(userId);
       }
 
       match /bookmarks/{bookmarkId} {
-        allow read, write: if isOwner(userId);
+        allow read: if isOwner(userId);
+        allow create, update: if isOwner(userId)
+          && isValidBookmarkDocument(request.resource.data, bookmarkId);
+        allow delete: if isOwner(userId);
       }
     }
 
     match /community_messages/{messageId} {
       allow read: if true;
-      allow create: if isVerified()
-        && request.resource.data.userId == request.auth.uid
-        && request.resource.data.text is string
-        && request.resource.data.text.size() > 0
-        && request.resource.data.text.size() <= 1000
-        && request.resource.data.createdAt == request.time;
-      allow update, delete: if isAdmin();
+      allow create: if isValidCommunityCreate();
+      allow update: if false;
+      allow delete: if isAdmin();
     }
 
     match /{document=**} {

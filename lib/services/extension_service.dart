@@ -7,6 +7,22 @@ import '../models/plugin_info.dart';
 import 'plugin/plugin_loader.dart';
 import 'plugin/vbook_engine_channel.dart';
 
+class ExtensionUrlValidationResult {
+  final String url;
+  final Uri? uri;
+  final String? errorMessage;
+
+  const ExtensionUrlValidationResult._({
+    required this.url,
+    required this.uri,
+    required this.errorMessage,
+  });
+
+  bool get isValid => errorMessage == null;
+  bool get isCleartext => uri?.scheme.toLowerCase() == 'http';
+  String get host => uri?.host ?? '';
+}
+
 /// Service quản lý extension/plugin nguồn truyện online
 class ExtensionService {
   static const String _defaultRegistryUrl =
@@ -23,8 +39,77 @@ class ExtensionService {
   ];
 
   // ── Fetch danh sách extension từ registry URL ──
+  static ExtensionUrlValidationResult validateUserProvidedUrl(String input) {
+    final trimmed = input.trim();
+    if (trimmed.isEmpty) {
+      return const ExtensionUrlValidationResult._(
+        url: '',
+        uri: null,
+        errorMessage: 'URL khong duoc de trong.',
+      );
+    }
+
+    if (RegExp(r'\s').hasMatch(trimmed)) {
+      return ExtensionUrlValidationResult._(
+        url: trimmed,
+        uri: null,
+        errorMessage: 'URL khong hop le. Hay encode khoang trang neu can.',
+      );
+    }
+
+    final Uri uri;
+    try {
+      uri = Uri.parse(trimmed);
+    } on FormatException {
+      return ExtensionUrlValidationResult._(
+        url: trimmed,
+        uri: null,
+        errorMessage: 'URL khong dung dinh dang.',
+      );
+    }
+
+    final scheme = uri.scheme.toLowerCase();
+    if (scheme != 'http' && scheme != 'https') {
+      return ExtensionUrlValidationResult._(
+        url: trimmed,
+        uri: uri,
+        errorMessage: 'Chi ho tro URL http:// hoac https://.',
+      );
+    }
+
+    if (!uri.hasAuthority || uri.host.isEmpty) {
+      return ExtensionUrlValidationResult._(
+        url: trimmed,
+        uri: uri,
+        errorMessage: 'URL phai co host hop le.',
+      );
+    }
+
+    if (uri.userInfo.isNotEmpty) {
+      return ExtensionUrlValidationResult._(
+        url: trimmed,
+        uri: uri,
+        errorMessage: 'Khong duoc nhap URL co username hoac password.',
+      );
+    }
+
+    return ExtensionUrlValidationResult._(
+      url: trimmed,
+      uri: uri,
+      errorMessage: null,
+    );
+  }
+
+  static String _validatedUrlOrThrow(String input) {
+    final validation = validateUserProvidedUrl(input);
+    if (!validation.isValid) {
+      throw Exception(validation.errorMessage);
+    }
+    return validation.url;
+  }
+
   static Future<List<PluginInfo>> fetchRegistry({String? url}) async {
-    final registryUrl = url ?? _defaultRegistryUrl;
+    final registryUrl = _validatedUrlOrThrow(url ?? _defaultRegistryUrl);
     try {
       final response = await http
           .get(Uri.parse(registryUrl))
@@ -50,7 +135,10 @@ class ExtensionService {
       final installedMap = {for (final p in installedPlugins) p.id: p};
 
       return dataList.map((item) {
-        final plugin = PluginInfo.fromRegistryJson(item as Map<String, dynamic>, registryUrl: registryUrl);
+        final plugin = PluginInfo.fromRegistryJson(
+          item as Map<String, dynamic>,
+          registryUrl: registryUrl,
+        );
         final installed = installedMap[plugin.id];
         if (installed != null) {
           plugin.isInstalled = true;
@@ -74,10 +162,12 @@ class ExtensionService {
   }
 
   static Future<void> addRegistryUrl(String url) async {
+    final registryUrl = _validatedUrlOrThrow(url);
     final prefs = await SharedPreferences.getInstance();
     final saved = prefs.getStringList(_prefsKeyRegistries) ?? [];
-    if (!saved.contains(url) && !_builtinRegistries.contains(url)) {
-      saved.add(url);
+    if (!saved.contains(registryUrl) &&
+        !_builtinRegistries.contains(registryUrl)) {
+      saved.add(registryUrl);
       await prefs.setStringList(_prefsKeyRegistries, saved);
     }
   }
@@ -90,18 +180,22 @@ class ExtensionService {
     await prefs.setStringList(_prefsKeyRegistries, saved);
   }
 
-
   // ── Install plugin ──
   static Future<void> installPlugin(PluginInfo plugin) async {
     final installed = await getInstalledPlugins();
     final idx = installed.indexWhere((p) => p.id == plugin.id);
 
-    final zipUrl = plugin.downloadUrl.isNotEmpty ? plugin.downloadUrl : plugin.source;
-    if (zipUrl.isEmpty || (!zipUrl.startsWith('http://') && !zipUrl.startsWith('https://'))) {
-      throw Exception('URL tải extension không hợp lệ: "$zipUrl"');
+    final zipUrl = _validatedUrlOrThrow(
+      plugin.downloadUrl.isNotEmpty ? plugin.downloadUrl : plugin.source,
+    );
+    final zipUrlScheme = Uri.parse(zipUrl).scheme.toLowerCase();
+    if (zipUrl.isEmpty || (zipUrlScheme != 'http' && zipUrlScheme != 'https')) {
+      throw Exception('URL tai extension khong hop le.');
     }
 
-    debugPrint('[ExtensionService] installPlugin: downloading $zipUrl for plugin ${plugin.id}');
+    debugPrint(
+      '[ExtensionService] installPlugin: downloading plugin ${plugin.id}',
+    );
     final dirPath = await PluginLoader.installPlugin(zipUrl, plugin.id);
     if (dirPath == null) {
       throw Exception('Không thể tải hoặc giải nén extension');
@@ -112,7 +206,9 @@ class ExtensionService {
     final srcDir = Directory('$dirPath/src');
     if (!pluginJsonFile.existsSync()) {
       // Check one level deeper (some zips have a single subfolder)
-      final subDirs = Directory(dirPath).listSync().whereType<Directory>().toList();
+      final subDirs = Directory(
+        dirPath,
+      ).listSync().whereType<Directory>().toList();
       bool foundInSub = false;
       if (subDirs.length == 1) {
         final subPluginJson = File('${subDirs.first.path}/plugin.json');
@@ -125,11 +221,22 @@ class ExtensionService {
       }
     }
 
-    // Try loading into engine (non-blocking - will be retried when browsing)
+    // Mandatory engine load validation
+    bool loaded = false;
     try {
-      await VBookEngineChannel.loadSource(plugin.id.hashCode, dirPath);
+      loaded = await VBookEngineChannel.loadSource(plugin.id, dirPath);
     } catch (e) {
-      debugPrint('[ExtensionService] Engine pre-load warning (non-fatal): $e');
+      await _safeCleanupDir(dirPath);
+      throw Exception(
+        'Không thể khởi tạo extension engine cho "${plugin.name}": ${e.toString().replaceAll('Exception: ', '')}',
+      );
+    }
+
+    if (!loaded) {
+      await _safeCleanupDir(dirPath);
+      throw Exception(
+        'Không thể khởi tạo extension engine cho "${plugin.name}".',
+      );
     }
 
     final updatedPlugin = PluginInfo(
@@ -156,6 +263,17 @@ class ExtensionService {
     }
 
     await _saveInstalledPlugins(installed);
+  }
+
+  static Future<void> _safeCleanupDir(String dirPath) async {
+    try {
+      final dir = Directory(dirPath);
+      if (await dir.exists()) {
+        await dir.delete(recursive: true);
+      }
+    } catch (e) {
+      debugPrint('[ExtensionService] _safeCleanupDir error: $e');
+    }
   }
 
   // ── Cài đặt plugin từ file ZIP cục bộ ──
@@ -189,11 +307,20 @@ class ExtensionService {
       );
     }
 
-    // Try loading into engine (non-blocking)
+    // Mandatory engine load validation
+    bool loaded = false;
     try {
-      await VBookEngineChannel.loadSource(pluginId.hashCode, dirPath);
+      loaded = await VBookEngineChannel.loadSource(pluginId, dirPath);
     } catch (e) {
-      debugPrint('[ExtensionService] Engine pre-load warning (non-fatal): $e');
+      await _safeCleanupDir(dirPath);
+      throw Exception(
+        'Không thể khởi tạo extension engine cho "$pluginId": ${e.toString().replaceAll('Exception: ', '')}',
+      );
+    }
+
+    if (!loaded) {
+      await _safeCleanupDir(dirPath);
+      throw Exception('Không thể khởi tạo extension engine cho "$pluginId".');
     }
 
     final installed = await getInstalledPlugins();
@@ -209,9 +336,14 @@ class ExtensionService {
 
   // ── Cài đặt plugin từ URL file ZIP trực tiếp ──
   static Future<PluginInfo> installFromZipUrl(String zipUrl) async {
-    final response = await http.get(Uri.parse(zipUrl)).timeout(const Duration(seconds: 30));
+    final validatedZipUrl = _validatedUrlOrThrow(zipUrl);
+    final response = await http
+        .get(Uri.parse(validatedZipUrl))
+        .timeout(const Duration(seconds: 30));
     if (response.statusCode != 200) {
-      throw Exception('Không thể tải file ZIP từ URL (HTTP ${response.statusCode})');
+      throw Exception(
+        'Không thể tải file ZIP từ URL (HTTP ${response.statusCode})',
+      );
     }
     final tempDirPath = await PluginLoader.getPluginDir('_temp_download');
     final tempDir = Directory(tempDirPath);
@@ -271,7 +403,7 @@ class ExtensionService {
           }
         }
       } catch (e) {
-        debugPrint('[ExtensionService] Error fetching $url: $e');
+        debugPrint('[ExtensionService] Error fetching registry: $e');
       }
     }
 

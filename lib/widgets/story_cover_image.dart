@@ -80,6 +80,19 @@ class _StoryCoverImageState extends State<StoryCoverImage> {
     return ClipRRect(borderRadius: widget.borderRadius!, child: content);
   }
 
+  Map<String, String> _buildImageHeaders(String imageUrl) {
+    final uri = Uri.tryParse(imageUrl);
+    String referer = 'https://google.com';
+    if (uri != null && uri.host.isNotEmpty) {
+      referer = '${uri.scheme}://${uri.host}/';
+    }
+    return {
+      'User-Agent':
+          'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+      'Referer': referer,
+    };
+  }
+
   Widget _networkImage(List<String> candidates) {
     if (candidates.isEmpty) return _fallback();
 
@@ -88,6 +101,7 @@ class _StoryCoverImageState extends State<StoryCoverImage> {
 
     return Image.network(
       imageUrl,
+      headers: _buildImageHeaders(imageUrl),
       key: ValueKey(imageUrl),
       width: widget.width,
       height: widget.height,

@@ -34,6 +34,9 @@ migrate_working_dir/
 /android/build/
 /coverage/
 
+# Node/npm test dependencies
+/node_modules/
+
 # Symbolication related
 app.*.symbols
 

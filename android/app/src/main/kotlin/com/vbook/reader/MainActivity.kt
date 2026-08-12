@@ -29,8 +29,8 @@ class MainActivity : FlutterActivity() {
         .followSslRedirects(true)
         .cookieJar(WebViewCookieJar())
         .build()
-    // Key: pluginId hashCode (from Dart), Value: JsSource
-    private val sources = mutableMapOf<Long, JsSource>()
+    // Key: pluginId (String from Dart), Value: JsSource
+    private val sources = mutableMapOf<String, JsSource>()
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
@@ -52,8 +52,8 @@ class MainActivity : FlutterActivity() {
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, ENGINE_CHANNEL).setMethodCallHandler { call, result ->
             when (call.method) {
                 "loadSource" -> {
-                    val id = call.argument<Number>("id")?.toLong() ?: return@setMethodCallHandler result.error("INVALID_ID", null, null)
-                    val dirPath = call.argument<String>("dirPath") ?: return@setMethodCallHandler result.error("INVALID_DIR", null, null)
+                    val id = call.argument<String>("id") ?: return@setMethodCallHandler result.error("INVALID_ID", "Plugin ID is null", null)
+                    val dirPath = call.argument<String>("dirPath") ?: return@setMethodCallHandler result.error("INVALID_DIR", "Directory path is null", null)
                     
                     sources.remove(id)?.closeEngine()
                     
@@ -69,7 +69,6 @@ class MainActivity : FlutterActivity() {
                             // ── Diagnostic: list all files in the plugin directory ──
                             logcat(LogPriority.INFO) { "[MainActivity] loadSource: loading from $dirPath with id=$id" }
 
-                            
                             // Use the proper JsLoader which handles plugin.json, nested dirs, script loading
                             val extensionInfo = JsLoader.loadExtension(this@MainActivity, dir, client)
                             if (extensionInfo == null) {
@@ -77,7 +76,7 @@ class MainActivity : FlutterActivity() {
                                 val errorFile = File(this@MainActivity.cacheDir, "js_error_${dir.name}.txt")
                                 val errorDetail = if (errorFile.exists()) errorFile.readText() else "JsLoader returned null (no error file found)"
                                 logcat(LogPriority.ERROR) { "[MainActivity] loadSource: LOAD_FAILED for $dirPath\n$errorDetail" }
-                                withContext(Dispatchers.Main) { result.error("LOAD_FAILED", "Failed to load extension from $dirPath: $errorDetail", null) }
+                                withContext(Dispatchers.Main) { result.error("LOAD_FAILED", "Failed to load extension '$id' from $dirPath: $errorDetail", null) }
                                 return@launch
                             }
                             
@@ -94,9 +93,9 @@ class MainActivity : FlutterActivity() {
                     }
                 }
                 "getPopularManga" -> {
-                    val id = call.argument<Number>("id")?.toLong() ?: return@setMethodCallHandler result.error("INVALID_ID", null, null)
+                    val id = call.argument<String>("id") ?: return@setMethodCallHandler result.error("INVALID_ID", "Plugin ID is null", null)
                     val page = call.argument<Int>("page") ?: 1
-                    val source = sources[id] ?: return@setMethodCallHandler result.error("NOT_LOADED", "Source $id not loaded. Call loadSource first.", null)
+                    val source = sources[id] ?: return@setMethodCallHandler result.error("NOT_LOADED", "Source '$id' not loaded. Call loadSource first.", null)
                     
                     CoroutineScope(Dispatchers.IO).launch {
                         try {
@@ -113,9 +112,9 @@ class MainActivity : FlutterActivity() {
                     }
                 }
                 "getLatestUpdates" -> {
-                    val id = call.argument<Number>("id")?.toLong() ?: return@setMethodCallHandler result.error("INVALID_ID", null, null)
+                    val id = call.argument<String>("id") ?: return@setMethodCallHandler result.error("INVALID_ID", "Plugin ID is null", null)
                     val page = call.argument<Int>("page") ?: 1
-                    val source = sources[id] ?: return@setMethodCallHandler result.error("NOT_LOADED", "Source $id not loaded. Call loadSource first.", null)
+                    val source = sources[id] ?: return@setMethodCallHandler result.error("NOT_LOADED", "Source '$id' not loaded. Call loadSource first.", null)
                     
                     CoroutineScope(Dispatchers.IO).launch {
                         try {
@@ -132,10 +131,10 @@ class MainActivity : FlutterActivity() {
                     }
                 }
                 "getSearchManga" -> {
-                    val id = call.argument<Number>("id")?.toLong() ?: return@setMethodCallHandler result.error("INVALID_ID", null, null)
+                    val id = call.argument<String>("id") ?: return@setMethodCallHandler result.error("INVALID_ID", "Plugin ID is null", null)
                     val page = call.argument<Int>("page") ?: 1
                     val query = call.argument<String>("query") ?: ""
-                    val source = sources[id] ?: return@setMethodCallHandler result.error("NOT_LOADED", "Source $id not loaded", null)
+                    val source = sources[id] ?: return@setMethodCallHandler result.error("NOT_LOADED", "Source '$id' not loaded", null)
                     
                     CoroutineScope(Dispatchers.IO).launch {
                         try {
@@ -153,8 +152,8 @@ class MainActivity : FlutterActivity() {
                     }
                 }
                 "getHomeTabs" -> {
-                    val id = call.argument<Number>("id")?.toLong() ?: return@setMethodCallHandler result.error("INVALID_ID", null, null)
-                    val source = sources[id] ?: return@setMethodCallHandler result.error("NOT_LOADED", "Source $id not loaded", null)
+                    val id = call.argument<String>("id") ?: return@setMethodCallHandler result.error("INVALID_ID", "Plugin ID is null", null)
+                    val source = sources[id] ?: return@setMethodCallHandler result.error("NOT_LOADED", "Source '$id' not loaded", null)
                     
                     CoroutineScope(Dispatchers.IO).launch {
                         try {
@@ -167,11 +166,11 @@ class MainActivity : FlutterActivity() {
                     }
                 }
                 "getMangaListByTab" -> {
-                    val id = call.argument<Number>("id")?.toLong() ?: return@setMethodCallHandler result.error("INVALID_ID", null, null)
+                    val id = call.argument<String>("id") ?: return@setMethodCallHandler result.error("INVALID_ID", "Plugin ID is null", null)
                     val input = call.argument<String>("input") ?: ""
                     val script = call.argument<String>("script") ?: "gen.js"
                     val page = call.argument<Int>("page") ?: 1
-                    val source = sources[id] ?: return@setMethodCallHandler result.error("NOT_LOADED", "Source $id not loaded", null)
+                    val source = sources[id] ?: return@setMethodCallHandler result.error("NOT_LOADED", "Source '$id' not loaded", null)
                     
                     CoroutineScope(Dispatchers.IO).launch {
                         try {
@@ -188,9 +187,9 @@ class MainActivity : FlutterActivity() {
                     }
                 }
                 "getMangaDetails" -> {
-                    val id = call.argument<Number>("id")?.toLong() ?: return@setMethodCallHandler result.error("INVALID_ID", null, null)
+                    val id = call.argument<String>("id") ?: return@setMethodCallHandler result.error("INVALID_ID", "Plugin ID is null", null)
                     val url = call.argument<String>("url") ?: ""
-                    val source = sources[id] ?: return@setMethodCallHandler result.error("NOT_LOADED", "Source $id not loaded", null)
+                    val source = sources[id] ?: return@setMethodCallHandler result.error("NOT_LOADED", "Source '$id' not loaded", null)
                     
                     CoroutineScope(Dispatchers.IO).launch {
                         try {
@@ -213,9 +212,9 @@ class MainActivity : FlutterActivity() {
                     }
                 }
                 "getChapterList" -> {
-                    val id = call.argument<Number>("id")?.toLong() ?: return@setMethodCallHandler result.error("INVALID_ID", null, null)
+                    val id = call.argument<String>("id") ?: return@setMethodCallHandler result.error("INVALID_ID", "Plugin ID is null", null)
                     val url = call.argument<String>("url") ?: ""
-                    val source = sources[id] ?: return@setMethodCallHandler result.error("NOT_LOADED", "Source $id not loaded", null)
+                    val source = sources[id] ?: return@setMethodCallHandler result.error("NOT_LOADED", "Source '$id' not loaded", null)
                     
                     CoroutineScope(Dispatchers.IO).launch {
                         try {
@@ -232,9 +231,9 @@ class MainActivity : FlutterActivity() {
                     }
                 }
                 "getPageList" -> {
-                    val id = call.argument<Number>("id")?.toLong() ?: return@setMethodCallHandler result.error("INVALID_ID", null, null)
+                    val id = call.argument<String>("id") ?: return@setMethodCallHandler result.error("INVALID_ID", "Plugin ID is null", null)
                     val url = call.argument<String>("url") ?: ""
-                    val source = sources[id] ?: return@setMethodCallHandler result.error("NOT_LOADED", "Source $id not loaded", null)
+                    val source = sources[id] ?: return@setMethodCallHandler result.error("NOT_LOADED", "Source '$id' not loaded", null)
                     
                     CoroutineScope(Dispatchers.IO).launch {
                         try {
@@ -251,7 +250,7 @@ class MainActivity : FlutterActivity() {
                     }
                 }
                 "closeSource" -> {
-                    val id = call.argument<Number>("id")?.toLong() ?: return@setMethodCallHandler result.error("INVALID_ID", null, null)
+                    val id = call.argument<String>("id") ?: return@setMethodCallHandler result.error("INVALID_ID", "Plugin ID is null", null)
                     val source = sources.remove(id)
                     source?.closeEngine()
                     result.success(true)
