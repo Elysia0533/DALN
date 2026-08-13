@@ -959,22 +959,13 @@ class ApiService {
     final prefs = await SharedPreferences.getInstance();
     final rawUser = prefs.getString(_authUserKey);
     if (rawUser == null || rawUser.isEmpty) return null;
-    final user = AppUser.fromJson(json.decode(rawUser) as Map<String, dynamic>);
-    final isAdmin =
-        FirebaseBackendService.isAdminEmail(user.email) || user.role == 'admin';
-    if (isAdmin) {
-      return user.copyWith(role: 'admin');
-    }
-    return user;
+    return AppUser.fromJson(json.decode(rawUser) as Map<String, dynamic>);
   }
 
   static Future<void> _saveAuthSession(AppUser user, String token) async {
     final prefs = await SharedPreferences.getInstance();
-    final isAdmin =
-        FirebaseBackendService.isAdminEmail(user.email) || user.role == 'admin';
-    final finalUser = isAdmin ? user.copyWith(role: 'admin') : user;
     await prefs.setString(_authTokenKey, token);
-    await prefs.setString(_authUserKey, json.encode(finalUser.toJson()));
+    await prefs.setString(_authUserKey, json.encode(user.toJson()));
   }
 
   static Future<void> mergeCloudLibraryIntoLocal() async {
@@ -1490,14 +1481,8 @@ class ApiService {
   }
 
   static Future<void> deleteCommunityMessage(String messageId) async {
-    final user = await getSavedUser();
-    if (user?.role != 'admin') {
-      throw Exception('Tài khoản hiện tại không có quyền admin.');
-    }
-
     if (!FirebaseBackendService.isInitialized) {
-      await _deleteLocalCommunityMessage(messageId);
-      return;
+      throw Exception('Chỉ tài khoản admin đám mây mới có quyền xóa tin nhắn.');
     }
 
     await FirebaseBackendService.deleteCommunityMessage(messageId);
@@ -1532,12 +1517,11 @@ class ApiService {
       throw Exception('Email này đã được đăng ký.');
     }
 
-    final isAdmin = FirebaseBackendService.isAdminEmail(normalizedEmail);
     final user = AppUser(
       id: 'local_${const Uuid().v4()}',
       email: normalizedEmail,
       displayName: displayName.trim(),
-      role: isAdmin ? 'admin' : 'user',
+      role: 'user',
       emailVerified: true,
     );
 
@@ -1597,11 +1581,7 @@ class ApiService {
       found = migratedAccount;
     }
 
-    final isAdmin = FirebaseBackendService.isAdminEmail(normalizedEmail);
-    final savedRole = found['role']?.toString() ?? 'user';
-    final user = AppUser.fromJson(
-      found,
-    ).copyWith(role: (isAdmin || savedRole == 'admin') ? 'admin' : 'user');
+    final user = AppUser.fromJson(found);
     await _saveAuthSession(user, user.id);
     return user;
   }
@@ -1679,15 +1659,22 @@ class ApiService {
       throw Exception('Cần đăng nhập để gửi tin nhắn.');
     }
 
+    if (text.trim().isEmpty) {
+      throw Exception('Tin nhắn không được để trống.');
+    }
+    if (attachmentType.trim().isNotEmpty || attachmentPath.trim().isNotEmpty) {
+      throw Exception(
+        'Tệp đính kèm chưa được hỗ trợ. Vui lòng gửi tin nhắn văn bản.',
+      );
+    }
+
     final message = CommunityMessage(
       id: 'local_${const Uuid().v4()}',
       userId: user.id,
       displayName: user.displayName,
       avatarUrl: user.avatarUrl,
-      text: text,
+      text: text.trim(),
       createdAt: DateTime.now().toIso8601String(),
-      attachmentType: attachmentType,
-      attachmentPath: attachmentPath,
     );
 
     final prefs = await SharedPreferences.getInstance();
@@ -1701,16 +1688,6 @@ class ApiService {
       recentMessages.map((item) => json.encode(item.toJson())).toList(),
     );
     return message;
-  }
-
-  static Future<void> _deleteLocalCommunityMessage(String messageId) async {
-    final prefs = await SharedPreferences.getInstance();
-    final messages = await _fetchLocalCommunityMessages();
-    messages.removeWhere((message) => message.id == messageId);
-    await prefs.setStringList(
-      _localCommunityMessagesKey,
-      messages.map((item) => json.encode(item.toJson())).toList(),
-    );
   }
 
   static Future<void> _syncStoryToBackendLibrary(Story story) async {

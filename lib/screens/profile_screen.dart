@@ -91,7 +91,7 @@ class ProfileScreen extends StatelessWidget {
                   controller: emailController,
                   decoration: const InputDecoration(
                     labelText: 'Email',
-                    hintText: 'admin@example.com',
+                    hintText: 'ban@example.com',
                     prefixIcon: Icon(Icons.email_outlined),
                     border: OutlineInputBorder(),
                   ),
@@ -1043,6 +1043,20 @@ class ProfileScreen extends StatelessWidget {
                 ),
               ),
             ],
+            if (userProvider.isLoggedIn)
+              _buildSettingsTile(
+                context,
+                icon: Icons.verified_user_outlined,
+                title: 'Làm mới quyền truy cập',
+                subtitle: _adminClaimStatusText(userProvider),
+                onTap: () async {
+                  await context.read<UserProvider>().refreshAdminClaim();
+                  if (!context.mounted) return;
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(content: Text('Đã làm mới quyền truy cập.')),
+                  );
+                },
+              ),
             if (userProvider.isAdmin)
               _buildAdminSection(context, sectionBgColor, textColor),
             _buildSectionHeader('Ứng dụng', sectionBgColor, textColor),
@@ -1106,6 +1120,15 @@ class ProfileScreen extends StatelessWidget {
       return userProvider.email;
     }
     return 'Sẵn sàng đăng nhập và đồng bộ';
+  }
+
+  String _adminClaimStatusText(UserProvider userProvider) {
+    if (!userProvider.isLoggedIn) return 'Chưa đăng nhập';
+    if (userProvider.isAdminLoading) return 'Đang kiểm tra quyền';
+    if (userProvider.hasAdminClaimError) {
+      return 'Không thể kiểm tra, tạm thời không cấp quyền admin';
+    }
+    return userProvider.isAdmin ? 'Quản trị viên' : 'Thành viên';
   }
 
   Widget _buildSyncStatusIcon(BuildContext context, UserProvider userProvider) {
@@ -1341,8 +1364,10 @@ class ProfileScreen extends StatelessWidget {
                   trailing: const Icon(Icons.chevron_right_rounded),
                   onTap: () async {
                     Navigator.pop(ctx);
-                    if (story.pluginId.isNotEmpty && story.storyUrl.isNotEmpty) {
-                      final installed = await ExtensionService.getInstalledPlugins();
+                    if (story.pluginId.isNotEmpty &&
+                        story.storyUrl.isNotEmpty) {
+                      final installed =
+                          await ExtensionService.getInstalledPlugins();
                       final plugin = installed.firstWhere(
                         (p) => p.id == story.pluginId,
                         orElse: () => PluginInfo(
@@ -1611,19 +1636,6 @@ class ProfileScreen extends StatelessWidget {
             Navigator.of(
               context,
             ).push(MaterialPageRoute(builder: (_) => const CommunityScreen()));
-          },
-        ),
-        _buildSettingsTile(
-          context,
-          icon: Icons.verified_user_outlined,
-          title: 'Làm mới quyền admin',
-          subtitle: 'Cập nhật role từ phiên đăng nhập hiện tại',
-          onTap: () async {
-            await context.read<UserProvider>().refreshSession();
-            if (!context.mounted) return;
-            ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(content: Text('Đã làm mới quyền tài khoản.')),
-            );
           },
         ),
       ],

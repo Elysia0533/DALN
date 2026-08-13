@@ -50,7 +50,7 @@ const adminToken = {
   admin: true,
 };
 const emailOnlyAdminToken = {
-  email: 'vglduc25@gmail.com',
+  email: 'legacy-moderator@example.test',
   email_verified: true,
 };
 

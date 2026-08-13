@@ -23,6 +23,16 @@ class FirebaseBackendService {
   static firebase_auth.FirebaseAuth get _auth =>
       firebase_auth.FirebaseAuth.instance;
 
+  static Stream<String?> get idTokenUidChanges {
+    if (!_initialized) return const Stream<String?>.empty();
+    return _auth.idTokenChanges().map((user) => user?.uid);
+  }
+
+  static String? get currentAuthUserId {
+    if (!_initialized) return null;
+    return _auth.currentUser?.uid;
+  }
+
   static Future<void> initialize() async {
     if (!isConfigured) {
       debugPrint(
@@ -56,11 +66,26 @@ class FirebaseBackendService {
     }
   }
 
-  static bool isAdminEmail(String email) {
-    final normalized = email.trim().toLowerCase();
-    if (normalized.isEmpty) return false;
-    if (normalized.startsWith('admin@')) return true;
-    return VBookFirebaseConfig.adminEmails.contains(normalized);
+  static Future<Map<String, dynamic>?> readCurrentTokenClaims({
+    required bool forceRefresh,
+  }) async {
+    if (!_initialized) return null;
+    final user = _auth.currentUser;
+    if (user == null) return null;
+    final token = await user.getIdTokenResult(forceRefresh);
+    return token.claims;
+  }
+
+  static Future<bool> currentUserHasAdminClaim({
+    bool forceRefresh = false,
+  }) async {
+    try {
+      final claims = await readCurrentTokenClaims(forceRefresh: forceRefresh);
+      final value = claims?['admin'];
+      return value is bool && value == true;
+    } catch (_) {
+      return false;
+    }
   }
 
   static Future<AppUser> register({
@@ -260,9 +285,7 @@ class FirebaseBackendService {
     await user.reload();
     final refreshedUser = _auth.currentUser ?? user;
     if (!refreshedUser.emailVerified) {
-      throw Exception(
-        'Cáº§n Ä‘Äƒng nháº­p vÃ  xÃ¡c nháº­n email Ä‘á»ƒ gá»­i tin nháº¯n.',
-      );
+      throw Exception('Cần đăng nhập và xác nhận email để gửi tin nhắn.');
     }
 
     await _refreshVerifiedToken(refreshedUser);
@@ -299,12 +322,21 @@ class FirebaseBackendService {
     await user.reload();
     final refreshedUser = _auth.currentUser ?? user;
     await _refreshVerifiedToken(refreshedUser);
-    final appUser = await _appUserFromFirebase(refreshedUser);
-    if (appUser.role != 'admin') {
+    final isAdmin = await currentUserHasAdminClaim();
+    if (!isAdmin) {
       throw Exception('Tài khoản hiện tại không có quyền admin.');
     }
 
-    await _db.collection('community_messages').doc(messageId).delete();
+    try {
+      await _db.collection('community_messages').doc(messageId).delete();
+    } on FirebaseException catch (e) {
+      if (e.code == 'permission-denied') {
+        throw Exception(
+          'Tài khoản hiện tại không có quyền xóa tin nhắn hoặc quyền vừa thay đổi.',
+        );
+      }
+      rethrow;
+    }
   }
 
   static Future<void> syncStoryToLibrary(Story story) async {
@@ -444,9 +476,7 @@ class FirebaseBackendService {
         profile?['displayName']?.toString() ??
         user.displayName ??
         email.split('@').first;
-    final role = isAdminEmail(email)
-        ? 'admin'
-        : profile?['role']?.toString() ?? 'user';
+    final role = profile?['role']?.toString() ?? 'user';
 
     return AppUser(
       id: user.uid,

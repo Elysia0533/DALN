@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import 'package:file_picker/file_picker.dart';
 import 'package:provider/provider.dart';
 import 'dart:io';
 import '../models/community_message.dart';
@@ -22,8 +21,6 @@ class _CommunityScreenState extends State<CommunityScreen> {
   bool _isSending = false;
   String? _error;
   String? _loadedToken;
-  String _attachmentPath = '';
-  String _attachmentType = '';
 
   static const List<String> _quickEmojis = [
     '😊',
@@ -74,26 +71,27 @@ class _CommunityScreenState extends State<CommunityScreen> {
 
   Future<void> _sendMessage() async {
     final text = _messageController.text.trim();
-    if ((text.isEmpty && _attachmentPath.isEmpty) || _isSending) return;
+    if (text.isEmpty || _isSending) return;
 
     setState(() => _isSending = true);
     try {
-      final message = await ApiService.sendCommunityMessage(
-        text,
-        attachmentType: _attachmentType,
-        attachmentPath: _attachmentPath,
-      );
+      final message = await ApiService.sendCommunityMessage(text);
       if (!mounted) return;
       _messageController.clear();
       setState(() {
         _messages = [..._messages, message];
         _error = null;
-        _attachmentPath = '';
-        _attachmentType = '';
       });
       _scrollToBottom();
     } catch (e) {
       if (!mounted) return;
+      final lower = e.toString().toLowerCase();
+      if (lower.contains('permission-denied') ||
+          lower.contains('quyền') ||
+          lower.contains('quyen')) {
+        await context.read<UserProvider>().refreshAdminClaim();
+        if (!mounted) return;
+      }
       ScaffoldMessenger.of(
         context,
       ).showSnackBar(SnackBar(content: Text(_formatError(e))));
@@ -140,15 +138,6 @@ class _CommunityScreenState extends State<CommunityScreen> {
         context,
       ).showSnackBar(SnackBar(content: Text(_formatError(e))));
     }
-  }
-
-  Future<void> _pickAttachment(FileType type) async {
-    final result = await FilePicker.pickFiles(type: type);
-    if (result == null || result.files.single.path == null) return;
-    setState(() {
-      _attachmentPath = result.files.single.path!;
-      _attachmentType = type == FileType.video ? 'video' : 'image';
-    });
   }
 
   void _insertEmoji(String emoji) {
@@ -427,36 +416,9 @@ class _CommunityScreenState extends State<CommunityScreen> {
                       },
                     ),
                   ),
-                  if (_attachmentPath.isNotEmpty) ...[
-                    const SizedBox(height: 6),
-                    _AttachmentPreview(
-                      path: _attachmentPath,
-                      type: _attachmentType,
-                      onRemove: () {
-                        setState(() {
-                          _attachmentPath = '';
-                          _attachmentType = '';
-                        });
-                      },
-                    ),
-                  ],
                   const SizedBox(height: 6),
                   Row(
                     children: [
-                      IconButton(
-                        onPressed: _isSending
-                            ? null
-                            : () => _pickAttachment(FileType.image),
-                        icon: const Icon(Icons.image_outlined),
-                        tooltip: 'Gửi ảnh',
-                      ),
-                      IconButton(
-                        onPressed: _isSending
-                            ? null
-                            : () => _pickAttachment(FileType.video),
-                        icon: const Icon(Icons.video_file_outlined),
-                        tooltip: 'Gửi video',
-                      ),
                       Expanded(
                         child: TextField(
                           controller: _messageController,
@@ -642,11 +604,11 @@ class _MessageBubble extends StatelessWidget {
                 ],
               ),
             ),
-          if (message.attachmentPath.isNotEmpty) ...[
+          if (message.attachmentPath.trim().isNotEmpty ||
+              message.attachmentType.trim().isNotEmpty) ...[
             _MessageAttachment(
-              path: message.attachmentPath,
-              type: message.attachmentType,
               isMine: isMine,
+              attachmentOnly: message.text.trim().isEmpty,
             ),
             if (message.text.isNotEmpty) const SizedBox(height: 6),
           ],
@@ -784,101 +746,41 @@ class _TimelineSeparator extends StatelessWidget {
   }
 }
 
-class _AttachmentPreview extends StatelessWidget {
-  final String path;
-  final String type;
-  final VoidCallback onRemove;
-
-  const _AttachmentPreview({
-    required this.path,
-    required this.type,
-    required this.onRemove,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final fileName = path.split(RegExp(r'[\\/]')).last;
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-      decoration: BoxDecoration(
-        color: Theme.of(context).colorScheme.primary.withValues(alpha: 0.08),
-        borderRadius: BorderRadius.circular(8),
-      ),
-      child: Row(
-        children: [
-          Icon(type == 'video' ? Icons.videocam_outlined : Icons.image),
-          const SizedBox(width: 8),
-          Expanded(
-            child: Text(
-              fileName,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
-            ),
-          ),
-          IconButton(
-            onPressed: onRemove,
-            icon: const Icon(Icons.close, size: 18),
-            tooltip: 'Bỏ tệp',
-            visualDensity: VisualDensity.compact,
-          ),
-        ],
-      ),
-    );
-  }
-}
-
 class _MessageAttachment extends StatelessWidget {
-  final String path;
-  final String type;
   final bool isMine;
+  final bool attachmentOnly;
 
   const _MessageAttachment({
-    required this.path,
-    required this.type,
     required this.isMine,
+    required this.attachmentOnly,
   });
 
   @override
   Widget build(BuildContext context) {
-    if (type == 'image') {
-      final file = File(path);
-      if (file.existsSync()) {
-        return ClipRRect(
-          borderRadius: BorderRadius.circular(8),
-          child: Image.file(file, width: 220, height: 150, fit: BoxFit.cover),
-        );
-      }
-    }
+    final colorScheme = Theme.of(context).colorScheme;
+    final foreground = isMine ? Colors.white : colorScheme.onSurfaceVariant;
+    final background = Colors.black.withValues(alpha: isMine ? 0.18 : 0.08);
 
-    final fileName = path.split(RegExp(r'[\\/]')).last;
     return Container(
       width: 220,
       padding: const EdgeInsets.all(10),
       decoration: BoxDecoration(
-        color: Colors.black.withValues(alpha: isMine ? 0.18 : 0.08),
+        color: background,
         borderRadius: BorderRadius.circular(8),
       ),
       child: Row(
         children: [
-          Icon(
-            type == 'video'
-                ? Icons.play_circle_outline
-                : Icons.insert_drive_file,
-            color: isMine
-                ? Colors.white
-                : Theme.of(context).colorScheme.primary,
-          ),
+          Icon(Icons.hide_image_outlined, color: foreground, size: 18),
           const SizedBox(width: 8),
           Expanded(
             child: Text(
-              fileName,
+              attachmentOnly
+                  ? 'Tệp đính kèm cũ không còn được hỗ trợ.'
+                  : 'Tệp đính kèm cũ đã bị ẩn.',
               maxLines: 2,
               overflow: TextOverflow.ellipsis,
               style: TextStyle(
-                color: isMine
-                    ? Colors.white
-                    : Theme.of(context).colorScheme.onSurface,
+                color: foreground,
                 fontSize: 12,
                 fontWeight: FontWeight.w700,
               ),

@@ -1,6 +1,9 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../models/app_user.dart';
+import '../services/admin_claim_reader.dart';
 import '../services/api_service.dart';
 
 class UserProvider extends ChangeNotifier {
@@ -15,6 +18,11 @@ class UserProvider extends ChangeNotifier {
   String _token = '';
   String _avatarUrl = '';
   int _avatarColorValue = 0xFF4CAF50;
+  final AdminClaimReader _adminClaimReader;
+  StreamSubscription<String?>? _adminClaimSubscription;
+  AdminClaimStatus _adminClaimStatus = AdminClaimStatus.nonAdmin;
+  String _adminClaimError = '';
+  int _adminClaimRequestId = 0;
 
   String get name => _name;
   String get id => _id;
@@ -23,12 +31,24 @@ class UserProvider extends ChangeNotifier {
   String get token => _token;
   String get avatarUrl => _avatarUrl;
   bool get isLoggedIn => _user != null && _token.isNotEmpty;
-  bool get isAdmin => _role == 'admin';
+  bool get isAdmin => _adminClaimStatus == AdminClaimStatus.admin;
+  AdminClaimStatus get adminClaimStatus => _adminClaimStatus;
+  bool get isAdminLoading => _adminClaimStatus == AdminClaimStatus.loading;
+  bool get hasAdminClaimError => _adminClaimStatus == AdminClaimStatus.error;
+  String get adminClaimError => _adminClaimError;
   bool get emailVerified => _user?.emailVerified ?? false;
   Color get avatarColor => Color(_avatarColorValue);
 
-  UserProvider() {
+  UserProvider({AdminClaimReader? adminClaimReader})
+    : _adminClaimReader = adminClaimReader ?? const FirebaseAdminClaimReader() {
+    _startAdminClaimListener();
     _load();
+  }
+
+  @override
+  void dispose() {
+    _adminClaimSubscription?.cancel();
+    super.dispose();
   }
 
   Future<void> _load() async {
@@ -44,6 +64,91 @@ class UserProvider extends ChangeNotifier {
     notifyListeners();
 
     await refreshSession();
+  }
+
+  void _startAdminClaimListener() {
+    _adminClaimSubscription?.cancel();
+    _adminClaimSubscription = _adminClaimReader.userIdChanges.listen(
+      (uid) {
+        if (uid == null || uid.isEmpty) {
+          _setAdminClaimStatus(AdminClaimStatus.nonAdmin);
+          return;
+        }
+        unawaited(_readAdminClaimFor(uid, forceRefresh: false));
+      },
+      onError: (_) {
+        _setAdminClaimStatus(
+          AdminClaimStatus.error,
+          error: 'Không thể đọc quyền truy cập.',
+        );
+      },
+    );
+
+    final currentUid = _adminClaimReader.currentUserId;
+    if (currentUid == null || currentUid.isEmpty) {
+      _setAdminClaimStatus(AdminClaimStatus.nonAdmin, notify: false);
+    } else {
+      unawaited(_readAdminClaimFor(currentUid, forceRefresh: false));
+    }
+  }
+
+  Future<void> _readAdminClaimFor(
+    String uid, {
+    required bool forceRefresh,
+  }) async {
+    final requestId = ++_adminClaimRequestId;
+    _setAdminClaimStatus(AdminClaimStatus.loading);
+    try {
+      final claims = await _adminClaimReader.readClaims(
+        forceRefresh: forceRefresh,
+      );
+      if (requestId != _adminClaimRequestId ||
+          _adminClaimReader.currentUserId != uid) {
+        return;
+      }
+      _setAdminClaimStatus(
+        hasBooleanAdminClaim(claims)
+            ? AdminClaimStatus.admin
+            : AdminClaimStatus.nonAdmin,
+      );
+    } catch (_) {
+      if (requestId != _adminClaimRequestId ||
+          _adminClaimReader.currentUserId != uid) {
+        return;
+      }
+      _setAdminClaimStatus(
+        AdminClaimStatus.error,
+        error: 'Không thể đọc quyền truy cập.',
+      );
+    }
+  }
+
+  void _setAdminClaimStatus(
+    AdminClaimStatus status, {
+    String error = '',
+    bool notify = true,
+  }) {
+    if (status == AdminClaimStatus.nonAdmin) {
+      _adminClaimRequestId++;
+    }
+    _adminClaimStatus = status;
+    _adminClaimError = status == AdminClaimStatus.error ? error : '';
+    if (notify) notifyListeners();
+  }
+
+  Future<void> refreshAdminClaim() async {
+    await _syncAdminClaimFromCurrentUser(forceRefresh: true);
+  }
+
+  Future<void> _syncAdminClaimFromCurrentUser({
+    required bool forceRefresh,
+  }) async {
+    final uid = _adminClaimReader.currentUserId;
+    if (uid == null || uid.isEmpty) {
+      _setAdminClaimStatus(AdminClaimStatus.nonAdmin);
+      return;
+    }
+    await _readAdminClaimFor(uid, forceRefresh: forceRefresh);
   }
 
   Future<RegisterResult> registerWithBackend({
@@ -131,6 +236,7 @@ class UserProvider extends ChangeNotifier {
     await prefs.setString(_nameKey, _name);
     await prefs.setInt(_avatarColorKey, colorValue);
     await ApiService.mergeCloudLibraryIntoLocal();
+    await _syncAdminClaimFromCurrentUser(forceRefresh: false);
     notifyListeners();
   }
 
@@ -149,10 +255,12 @@ class UserProvider extends ChangeNotifier {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString(_nameKey, _name);
     await ApiService.mergeCloudLibraryIntoLocal();
+    await _syncAdminClaimFromCurrentUser(forceRefresh: false);
     notifyListeners();
   }
 
   Future<void> logout() async {
+    _setAdminClaimStatus(AdminClaimStatus.nonAdmin);
     await ApiService.logoutBackend();
     _user = null;
     _id = '';
