@@ -11,12 +11,13 @@ import '../models/story.dart';
 
 class FirebaseBackendService {
   static bool _initialized = false;
+  static bool _nativeAndroidConfigLoaded = false;
 
   static bool get isConfigured =>
-      VBookFirebaseConfig.isConfigured || _canUseNativeAndroidConfig;
+      VBookFirebaseConfig.isConfigured || _nativeAndroidConfigLoaded;
   static bool get isInitialized => _initialized;
 
-  static bool get _canUseNativeAndroidConfig =>
+  static bool get _canTryNativeAndroidConfig =>
       !kIsWeb && defaultTargetPlatform == TargetPlatform.android;
 
   static FirebaseFirestore get _db => FirebaseFirestore.instance;
@@ -34,7 +35,11 @@ class FirebaseBackendService {
   }
 
   static Future<void> initialize() async {
-    if (!isConfigured) {
+    _initialized = false;
+    _nativeAndroidConfigLoaded = false;
+
+    if (!VBookFirebaseConfig.isConfigured && !_canTryNativeAndroidConfig) {
+      debugPrint(VBookFirebaseConfig.configurationHelp);
       debugPrint(
         'Đồng bộ tài khoản chưa được cấu hình. Đăng nhập và chat sẽ tạm tắt trong bản chạy hiện tại.',
       );
@@ -51,10 +56,16 @@ class FirebaseBackendService {
           await Firebase.initializeApp();
         }
       }
+      _nativeAndroidConfigLoaded =
+          !VBookFirebaseConfig.isConfigured && _canTryNativeAndroidConfig;
       _initialized = true;
     } catch (e) {
       _initialized = false;
-      debugPrint('Không thể khởi tạo đồng bộ tài khoản: $e');
+      _nativeAndroidConfigLoaded = false;
+      if (!VBookFirebaseConfig.isConfigured) {
+        debugPrint(VBookFirebaseConfig.configurationHelp);
+      }
+      debugPrint('Không thể khởi tạo đồng bộ tài khoản (${e.runtimeType}).');
     }
   }
 
@@ -339,6 +350,19 @@ class FirebaseBackendService {
     }
   }
 
+  @visibleForTesting
+  static Map<String, dynamic> buildLibraryStoryPayload(Story story) {
+    // createdAt is immutable; omitting it keeps existing records unchanged.
+    return {
+      'storyId': story.id,
+      'story': story.toJson(),
+      'savedChapterIndex': story.savedChapterIndex,
+      'totalChapters': story.totalChapters,
+      'scrollOffset': 0,
+      'updatedAt': FieldValue.serverTimestamp(),
+    };
+  }
+
   static Future<void> syncStoryToLibrary(Story story) async {
     if (!_initialized) return;
     final user = _auth.currentUser;
@@ -349,15 +373,7 @@ class FirebaseBackendService {
         .doc(user.uid)
         .collection('library')
         .doc(story.id)
-        .set({
-          'storyId': story.id,
-          'story': story.toJson(),
-          'savedChapterIndex': story.savedChapterIndex,
-          'totalChapters': story.totalChapters,
-          'scrollOffset': 0,
-          'updatedAt': FieldValue.serverTimestamp(),
-          'createdAt': FieldValue.serverTimestamp(),
-        }, SetOptions(merge: true));
+        .set(buildLibraryStoryPayload(story), SetOptions(merge: true));
   }
 
   static Future<void> syncProgress(
@@ -403,6 +419,27 @@ class FirebaseBackendService {
         .delete();
   }
 
+  @visibleForTesting
+  static Story? parseCloudLibraryStory(Map<String, dynamic> data) {
+    try {
+      final rawStory = data['story'];
+      if (rawStory is! Map) {
+        debugPrint('Skipping malformed cloud library record (invalid story).');
+        return null;
+      }
+      final story = Story.fromJson(Map<String, dynamic>.from(rawStory));
+      return story.copyWith(
+        savedChapterIndex: _readInt(data['savedChapterIndex']),
+        totalChapters: _readInt(data['totalChapters'], story.totalChapters),
+      );
+    } catch (error) {
+      debugPrint(
+        'Skipping malformed cloud library record (${error.runtimeType}).',
+      );
+      return null;
+    }
+  }
+
   static Future<List<Story>> fetchCloudLibraryStories() async {
     if (!_initialized) return [];
     final user = _auth.currentUser;
@@ -416,16 +453,7 @@ class FirebaseBackendService {
         .get();
 
     return snapshot.docs
-        .map((doc) {
-          final data = doc.data();
-          final rawStory = data['story'];
-          if (rawStory is! Map) return null;
-          final story = Story.fromJson(Map<String, dynamic>.from(rawStory));
-          return story.copyWith(
-            savedChapterIndex: _readInt(data['savedChapterIndex']),
-            totalChapters: _readInt(data['totalChapters'], story.totalChapters),
-          );
-        })
+        .map((doc) => parseCloudLibraryStory(doc.data()))
         .whereType<Story>()
         .toList();
   }

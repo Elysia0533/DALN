@@ -104,7 +104,16 @@ service cloud.firestore {
         && isServerTimestampOnUpdate(request.resource.data, 'updatedAt');
     }
 
-    function isValidLibraryDocument(data, storyId) {
+    function hasValidLibraryProgressFields(data) {
+      return (!data.keys().hasAny(['savedChapterIndex'])
+          || (data.savedChapterIndex is int && data.savedChapterIndex >= 0))
+        && (!data.keys().hasAny(['totalChapters'])
+          || (data.totalChapters is int && data.totalChapters >= 0))
+        && (!data.keys().hasAny(['scrollOffset'])
+          || (data.scrollOffset is number && data.scrollOffset >= 0));
+    }
+
+    function isValidLibraryFullDocument(data, storyId) {
       return hasOnlyAllowedFields(data, [
           'storyId',
           'story',
@@ -126,33 +135,56 @@ service cloud.firestore {
         && data.storyId is string
         && data.storyId == storyId
         && data.story is map
-        && data.savedChapterIndex is int
-        && data.savedChapterIndex >= 0
-        && data.totalChapters is int
-        && data.totalChapters >= 0
-        && data.scrollOffset is number
-        && data.scrollOffset >= 0
+        && hasValidLibraryProgressFields(data)
         && data.updatedAt is timestamp
         && isOptionalTimestamp(data, 'createdAt')
         && isOptionalTimestamp(data, 'lastReadAt');
     }
 
+    function isValidLibraryProgressDocument(data) {
+      return hasOnlyAllowedFields(data, [
+          'savedChapterIndex',
+          'totalChapters',
+          'scrollOffset',
+          'updatedAt',
+          'lastReadAt'
+        ])
+        && data.keys().hasAll([
+          'savedChapterIndex',
+          'updatedAt'
+        ])
+        && hasValidLibraryProgressFields(data)
+        && data.updatedAt is timestamp
+        && isOptionalTimestamp(data, 'lastReadAt');
+    }
+
     function isValidLibraryCreate(storyId) {
-      return isValidLibraryDocument(request.resource.data, storyId)
-        && isServerTimestampOnCreate(request.resource.data, 'updatedAt')
-        && (!request.resource.data.keys().hasAny(['createdAt'])
-          || isServerTimestampOnCreate(request.resource.data, 'createdAt'))
-        && (!request.resource.data.keys().hasAny(['lastReadAt'])
-          || isServerTimestampOnCreate(request.resource.data, 'lastReadAt'));
+      return (isValidLibraryFullDocument(request.resource.data, storyId)
+          && isServerTimestampOnCreate(request.resource.data, 'updatedAt')
+          && (!request.resource.data.keys().hasAny(['createdAt'])
+            || isServerTimestampOnCreate(request.resource.data, 'createdAt'))
+          && (!request.resource.data.keys().hasAny(['lastReadAt'])
+            || isServerTimestampOnCreate(request.resource.data, 'lastReadAt')))
+        || (isValidLibraryProgressDocument(request.resource.data)
+          && isServerTimestampOnCreate(request.resource.data, 'updatedAt')
+          && (!request.resource.data.keys().hasAny(['lastReadAt'])
+            || isServerTimestampOnCreate(request.resource.data, 'lastReadAt')));
     }
 
     function isValidLibraryUpdate(storyId) {
-      return isValidLibraryDocument(request.resource.data, storyId)
-        && request.resource.data.storyId == resource.data.storyId
-        && (!request.resource.data.diff(resource.data).affectedKeys().hasAny(['createdAt'])
-          || request.resource.data.createdAt == resource.data.createdAt)
-        && isServerTimestampOnUpdate(request.resource.data, 'updatedAt')
-        && isServerTimestampOnUpdate(request.resource.data, 'lastReadAt');
+      return (isValidLibraryFullDocument(request.resource.data, storyId)
+          && (!resource.data.keys().hasAny(['storyId'])
+            || request.resource.data.storyId == resource.data.storyId)
+          && (!request.resource.data.diff(resource.data).affectedKeys().hasAny(['createdAt'])
+            || (resource.data.keys().hasAny(['createdAt'])
+              && request.resource.data.createdAt == resource.data.createdAt)
+            || (!resource.data.keys().hasAny(['createdAt'])
+              && isServerTimestampOnUpdate(request.resource.data, 'createdAt')))
+          && isServerTimestampOnUpdate(request.resource.data, 'updatedAt')
+          && isServerTimestampOnUpdate(request.resource.data, 'lastReadAt'))
+        || (isValidLibraryProgressDocument(request.resource.data)
+          && isServerTimestampOnUpdate(request.resource.data, 'updatedAt')
+          && isServerTimestampOnUpdate(request.resource.data, 'lastReadAt'));
     }
 
     function isValidBookmarkDocument(data, bookmarkId) {

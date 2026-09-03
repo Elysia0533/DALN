@@ -389,6 +389,7 @@ class _HomeScreenState extends State<HomeScreen> {
         ),
       );
 
+      if (!mounted) return;
       await Navigator.push(
         context,
         MaterialPageRoute(
@@ -708,8 +709,9 @@ class _HomeScreenState extends State<HomeScreen> {
                   },
                   child: Builder(
                     builder: (context) {
-                      final visibleStories =
-                          _filteredStories.take(_visibleCount).toList();
+                      final visibleStories = _filteredStories
+                          .take(_visibleCount)
+                          .toList();
                       final hasMore = _visibleCount < _filteredStories.length;
 
                       if (_isGridView) {
@@ -718,8 +720,9 @@ class _HomeScreenState extends State<HomeScreen> {
                           gridDelegate:
                               SliverGridDelegateWithFixedCrossAxisCount(
                                 crossAxisCount: _columnCount,
-                                childAspectRatio:
-                                    _columnCount == 2 ? 0.62 : 0.58,
+                                childAspectRatio: _columnCount == 2
+                                    ? 0.62
+                                    : 0.58,
                                 crossAxisSpacing: 14,
                                 mainAxisSpacing: 18,
                               ),
@@ -757,10 +760,7 @@ class _HomeScreenState extends State<HomeScreen> {
                               ),
                             );
                           }
-                          return _buildStoryCard(
-                            visibleStories[index],
-                            isDark,
-                          );
+                          return _buildStoryCard(visibleStories[index], isDark);
                         },
                       );
                     },
@@ -846,7 +846,9 @@ class _HomeScreenState extends State<HomeScreen> {
                     onPressed: () {
                       Navigator.push(
                         context,
-                        MaterialPageRoute(builder: (_) => const DownloadManagerScreen()),
+                        MaterialPageRoute(
+                          builder: (_) => const DownloadManagerScreen(),
+                        ),
                       );
                     },
                   ),

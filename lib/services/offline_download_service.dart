@@ -26,7 +26,8 @@ class DownloadItem {
 enum DownloadStatus { idle, downloading, paused, completed, error }
 
 class OfflineDownloadService extends ChangeNotifier {
-  static final OfflineDownloadService instance = OfflineDownloadService._internal();
+  static final OfflineDownloadService instance =
+      OfflineDownloadService._internal();
   factory OfflineDownloadService() => instance;
 
   OfflineDownloadService._internal();
@@ -44,7 +45,8 @@ class OfflineDownloadService extends ChangeNotifier {
   int get downloadedCount => _downloadedCount;
 
   final List<int> _failedChapterIndices = [];
-  List<int> get failedChapterIndices => List.unmodifiable(_failedChapterIndices);
+  List<int> get failedChapterIndices =>
+      List.unmodifiable(_failedChapterIndices);
   int get failedCount => _failedChapterIndices.length;
 
   String _currentDownloadingTitle = '';
@@ -53,7 +55,8 @@ class OfflineDownloadService extends ChangeNotifier {
   String _errorMessage = '';
   String get errorMessage => _errorMessage;
 
-  double get progress => _totalChapters > 0 ? (_downloadedCount / _totalChapters) : 0.0;
+  double get progress =>
+      _totalChapters > 0 ? (_downloadedCount / _totalChapters) : 0.0;
 
   bool _shouldCancel = false;
 
@@ -96,17 +99,23 @@ class OfflineDownloadService extends ChangeNotifier {
     return name.replaceAll(RegExp(r'[\\/:*?"<>|]'), '_').trim();
   }
 
-  Future<Directory> _getStoryFolder(String pluginId, String storyTitle, {bool createIfMissing = false}) async {
+  Future<Directory> _getStoryFolder(
+    String pluginId,
+    String storyTitle, {
+    bool createIfMissing = false,
+  }) async {
     final baseDir = await _offlineBaseDir;
     final sanitizedTitle = _sanitizeFileName(storyTitle);
     final sanitizedPlugin = _sanitizeFileName(pluginId);
-    
+
     // Check clean title folder first: VBook/{StoryTitle}
     final cleanFolder = Directory('${baseDir.path}/$sanitizedTitle');
     if (await cleanFolder.exists()) return cleanFolder;
 
     // Check legacy plugin_title folder
-    final legacyFolder = Directory('${baseDir.path}/${sanitizedPlugin}_$sanitizedTitle');
+    final legacyFolder = Directory(
+      '${baseDir.path}/${sanitizedPlugin}_$sanitizedTitle',
+    );
     if (await legacyFolder.exists()) return legacyFolder;
 
     if (createIfMissing) {
@@ -126,7 +135,14 @@ class OfflineDownloadService extends ChangeNotifier {
     for (final entity in entities) {
       if (entity is Directory) {
         final infoFile = File('${entity.path}/story_info.json');
-        final jsonFiles = entity.listSync().where((f) => f.path.endsWith('.json') && !f.path.endsWith('story_info.json')).toList();
+        final jsonFiles = entity
+            .listSync()
+            .where(
+              (f) =>
+                  f.path.endsWith('.json') &&
+                  !f.path.endsWith('story_info.json'),
+            )
+            .toList();
 
         if (jsonFiles.isNotEmpty || await infoFile.exists()) {
           String title = entity.path.split(Platform.pathSeparator).last;
@@ -142,7 +158,9 @@ class OfflineDownloadService extends ChangeNotifier {
             } catch (_) {}
           } else if (jsonFiles.isNotEmpty && jsonFiles.first is File) {
             try {
-              final content = jsonDecode((jsonFiles.first as File).readAsStringSync());
+              final content = jsonDecode(
+                (jsonFiles.first as File).readAsStringSync(),
+              );
               title = content['storyTitle'] ?? title;
               pluginId = content['pluginId'] ?? pluginId;
             } catch (_) {}
@@ -170,13 +188,21 @@ class OfflineDownloadService extends ChangeNotifier {
     }
   }
 
-  Future<bool> isChapterDownloaded(String pluginId, String storyTitle, int chapterIndex) async {
+  Future<bool> isChapterDownloaded(
+    String pluginId,
+    String storyTitle,
+    int chapterIndex,
+  ) async {
     final storyFolder = await _getStoryFolder(pluginId, storyTitle);
     final file = File('${storyFolder.path}/chap_$chapterIndex.json');
     return await file.exists();
   }
 
-  Future<String?> getDownloadedChapterContent(String pluginId, String storyTitle, int chapterIndex) async {
+  Future<String?> getDownloadedChapterContent(
+    String pluginId,
+    String storyTitle,
+    int chapterIndex,
+  ) async {
     final storyFolder = await _getStoryFolder(pluginId, storyTitle);
     final file = File('${storyFolder.path}/chap_$chapterIndex.json');
     if (await file.exists()) {
@@ -192,7 +218,8 @@ class OfflineDownloadService extends ChangeNotifier {
   Future<void> startBatchDownload({
     required PluginInfo plugin,
     required String storyTitle,
-    required List<Map<String, String>> chapters, // [{ 'url': ..., 'name': ... }]
+    required List<Map<String, String>>
+    chapters, // [{ 'url': ..., 'name': ... }]
     int startFrom = 0,
   }) async {
     _status = DownloadStatus.downloading;
@@ -203,18 +230,24 @@ class OfflineDownloadService extends ChangeNotifier {
     _failedChapterIndices.clear();
     notifyListeners();
 
-    final storyFolder = await _getStoryFolder(plugin.id, storyTitle, createIfMissing: true);
+    final storyFolder = await _getStoryFolder(
+      plugin.id,
+      storyTitle,
+      createIfMissing: true,
+    );
 
     // Save story_info.json inside the story subfolder
     try {
       final infoFile = File('${storyFolder.path}/story_info.json');
-      await infoFile.writeAsString(jsonEncode({
-        'pluginId': plugin.id,
-        'storyTitle': storyTitle,
-        'totalChapters': chapters.length,
-        'chapters': chapters,
-        'downloadedAt': DateTime.now().toIso8601String(),
-      }));
+      await infoFile.writeAsString(
+        jsonEncode({
+          'pluginId': plugin.id,
+          'storyTitle': storyTitle,
+          'totalChapters': chapters.length,
+          'chapters': chapters,
+          'downloadedAt': DateTime.now().toIso8601String(),
+        }),
+      );
     } catch (_) {}
 
     try {
@@ -264,7 +297,7 @@ class OfflineDownloadService extends ChangeNotifier {
         notifyListeners();
 
         final file = File('${storyFolder.path}/chap_$i.json');
-        
+
         bool hasValidContent = false;
         if (await file.exists()) {
           try {
@@ -291,11 +324,16 @@ class OfflineDownloadService extends ChangeNotifier {
             if (_shouldCancel) break;
 
             try {
-              final pages = await VBookEngineChannel.getPageList(plugin.id, url);
-              if (pages != null && pages.isNotEmpty) {
+              final pages = await VBookEngineChannel.getPageList(
+                plugin.id,
+                url,
+              );
+              if (pages.isNotEmpty) {
                 if (pages.length > 1) {
                   // Comic multiple images
-                  final pageUrls = pages.map((p) => p.imageUrl.isNotEmpty ? p.imageUrl : p.url).toList();
+                  final pageUrls = pages
+                      .map((p) => p.imageUrl.isNotEmpty ? p.imageUrl : p.url)
+                      .toList();
                   rawContent = jsonEncode(pageUrls);
                 } else {
                   // Novel text
@@ -330,7 +368,9 @@ class OfflineDownloadService extends ChangeNotifier {
             notifyListeners();
           } else {
             _failedChapterIndices.add(i);
-            debugPrint('Bỏ qua chương $i do server không trả về nội dung sau 3 lần thử.');
+            debugPrint(
+              'Bỏ qua chương $i do server không trả về nội dung sau 3 lần thử.',
+            );
           }
         }
 
@@ -357,12 +397,18 @@ class OfflineDownloadService extends ChangeNotifier {
   }
 
   /// 📦 Export downloaded story to TXT file
-  Future<File?> exportToTxt(String pluginId, String storyTitle, int totalChaps) async {
+  Future<File?> exportToTxt(
+    String pluginId,
+    String storyTitle,
+    int totalChaps,
+  ) async {
     final storyFolder = await _getStoryFolder(pluginId, storyTitle);
     if (!await storyFolder.exists()) return null;
 
     final baseDir = await _offlineBaseDir;
-    final exportFile = File('${baseDir.path}/${_sanitizeFileName(storyTitle)}.txt');
+    final exportFile = File(
+      '${baseDir.path}/${_sanitizeFileName(storyTitle)}.txt',
+    );
     final sink = exportFile.openWrite();
 
     sink.writeln('==================================================');
@@ -390,7 +436,12 @@ class OfflineDownloadService extends ChangeNotifier {
   }
 
   /// 📦 Export downloaded story to EPUB file
-  Future<File?> exportToEpub(String pluginId, String storyTitle, int totalChaps, {String author = 'VBook Source'}) async {
+  Future<File?> exportToEpub(
+    String pluginId,
+    String storyTitle,
+    int totalChaps, {
+    String author = 'VBook Source',
+  }) async {
     final storyFolder = await _getStoryFolder(pluginId, storyTitle);
     if (!await storyFolder.exists()) return null;
 
@@ -403,12 +454,9 @@ class OfflineDownloadService extends ChangeNotifier {
           final map = jsonDecode(jsonStr);
           final title = map['chapterTitle'] as String? ?? 'Chương ${i + 1}';
           final content = map['content'] as String? ?? '';
-          
+
           if (content.trim().isNotEmpty) {
-            chapters.add({
-              'title': title,
-              'content': content,
-            });
+            chapters.add({'title': title, 'content': content});
           }
         } catch (_) {}
       }

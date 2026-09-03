@@ -36,8 +36,8 @@ class ProfileScreen extends StatelessWidget {
         lower.contains('timeout')) {
       return 'Không kết nối được dịch vụ đăng nhập. Hãy kiểm tra mạng rồi thử lại.';
     }
-    if (lower.contains('firebase')) {
-      return 'Dịch vụ đăng nhập chưa sẵn sàng. Hãy kiểm tra cấu hình bản demo.';
+    if (lower.contains('firebase') || lower.contains('đồng bộ tài khoản')) {
+      return 'Dịch vụ đăng nhập thật chưa sẵn sàng. Hãy cấu hình Firebase trước khi đăng nhập.';
     }
     return message;
   }
@@ -78,7 +78,7 @@ class ProfileScreen extends StatelessWidget {
                         SizedBox(width: 8),
                         Expanded(
                           child: Text(
-                            'Bản test sẽ lưu tài khoản trên thiết bị này. Khi bật đồng bộ, app sẽ dùng tài khoản đám mây.',
+                            'Dịch vụ đăng nhập thật chưa được cấu hình hoặc chưa khởi tạo. Hãy truyền Firebase config bằng --dart-define rồi chạy lại app.',
                             style: TextStyle(fontSize: 12),
                           ),
                         ),
@@ -236,7 +236,7 @@ class ProfileScreen extends StatelessWidget {
               child: const Text('Hủy'),
             ),
             FilledButton(
-              onPressed: isSubmitting
+              onPressed: isSubmitting || !isCloudReady
                   ? null
                   : () async {
                       final email = emailController.text.trim();
@@ -1108,18 +1108,18 @@ class ProfileScreen extends StatelessWidget {
 
   String _syncStatusText(UserProvider userProvider) {
     if (userProvider.isLoggedIn && !FirebaseBackendService.isInitialized) {
-      return '${userProvider.email} - lưu trên thiết bị';
+      return '${userProvider.email} - phiên cục bộ cũ';
     }
     if (!FirebaseBackendService.isConfigured) {
-      return 'Sẵn sàng đăng ký trên thiết bị';
+      return 'Chưa cấu hình Firebase';
     }
     if (!FirebaseBackendService.isInitialized) {
-      return 'Sẵn sàng đăng ký trên thiết bị';
+      return 'Firebase chưa khởi tạo được';
     }
     if (userProvider.isLoggedIn) {
       return userProvider.email;
     }
-    return 'Sẵn sàng đăng nhập và đồng bộ';
+    return 'Sẵn sàng đăng nhập Firebase';
   }
 
   String _adminClaimStatusText(UserProvider userProvider) {

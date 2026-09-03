@@ -19,6 +19,38 @@ if (keystorePropertiesFile.exists()) {
     keystorePropertiesFile.inputStream().use { keystoreProperties.load(it) }
 }
 
+val appEnvironmentFile = rootProject.file("../.env")
+val appEnvironment = Properties()
+if (appEnvironmentFile.isFile) {
+    appEnvironmentFile.reader(Charsets.UTF_8).use { appEnvironment.load(it) }
+}
+
+fun appConfigValue(vararg names: String): String {
+    for (name in names) {
+        val value = System.getenv(name)?.trim().orEmpty()
+        if (value.isNotEmpty()) return value
+    }
+    for (name in names) {
+        val value = appEnvironment.getProperty(name)?.trim().orEmpty()
+        if (value.isNotEmpty()) return value
+    }
+    return ""
+}
+
+val firebaseApiKey = appConfigValue("FIREBASE_API_KEY", "FIREBASE_ANDROID_API_KEY")
+val firebaseAppId = appConfigValue("FIREBASE_APP_ID", "GOOGLE_APP_ID")
+val firebaseMessagingSenderId =
+    appConfigValue("FIREBASE_MESSAGING_SENDER_ID", "GCM_SENDER_ID")
+val firebaseProjectId = appConfigValue("FIREBASE_PROJECT_ID", "GCLOUD_PROJECT")
+val firebaseStorageBucket = appConfigValue("FIREBASE_STORAGE_BUCKET")
+val googleDriveApiKey = appConfigValue("GOOGLE_DRIVE_API_KEY")
+val missingFirebaseConfig = buildList {
+    if (firebaseApiKey.isEmpty()) add("FIREBASE_API_KEY")
+    if (firebaseAppId.isEmpty()) add("FIREBASE_APP_ID")
+    if (firebaseMessagingSenderId.isEmpty()) add("FIREBASE_MESSAGING_SENDER_ID")
+    if (firebaseProjectId.isEmpty()) add("FIREBASE_PROJECT_ID")
+}
+
 fun signingValue(propertyName: String, environmentName: String): String {
     return (keystoreProperties.getProperty(propertyName) ?: System.getenv(environmentName)).orEmpty()
 }
@@ -34,6 +66,12 @@ fun releaseStoreFilePath(): File {
 }
 
 if (releaseSigningTasks) {
+    if (missingFirebaseConfig.isNotEmpty()) {
+        throw GradleException(
+            "Release Firebase configuration is missing: ${missingFirebaseConfig.joinToString(", ")}. " +
+                "Set the values in the process environment or in the local repository .env file."
+        )
+    }
     val missing = buildList {
         if (releaseStoreFile.isBlank()) add("storeFile / VBOOK_RELEASE_STORE_FILE")
         if (releaseStorePassword.isBlank()) add("storePassword / VBOOK_RELEASE_STORE_PASSWORD")
@@ -52,6 +90,14 @@ if (releaseSigningTasks) {
                 "Update storeFile in android/key.properties or VBOOK_RELEASE_STORE_FILE."
         )
     }
+}
+
+if (!releaseSigningTasks && missingFirebaseConfig.isNotEmpty()) {
+    logger.warn(
+        "Firebase login configuration is missing: ${missingFirebaseConfig.joinToString(", ")}. " +
+            "Android will build with login disabled. Add the values to the process environment " +
+            "or to the local repository .env file."
+    )
 }
 
 android {
@@ -77,6 +123,21 @@ android {
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode
         versionName = flutter.versionName
+
+        // Exposed through a MethodChannel so Android builds can use local .env
+        // configuration without requiring Flutter --dart-define arguments.
+        resValue("string", "vbook_google_drive_api_key", googleDriveApiKey)
+
+        // firebase_core resolves these exact names through FirebaseOptions.fromResource().
+        if (missingFirebaseConfig.isEmpty()) {
+            resValue("string", "google_api_key", firebaseApiKey)
+            resValue("string", "google_app_id", firebaseAppId)
+            resValue("string", "gcm_defaultSenderId", firebaseMessagingSenderId)
+            resValue("string", "project_id", firebaseProjectId)
+            if (firebaseStorageBucket.isNotEmpty()) {
+                resValue("string", "google_storage_bucket", firebaseStorageBucket)
+            }
+        }
     }
 
     signingConfigs {

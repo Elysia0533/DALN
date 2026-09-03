@@ -1,25 +1,34 @@
 package com.vbook.reader
 
+import android.content.pm.PackageManager
+import android.os.Build
 import android.webkit.CookieManager
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Cookie
 import okhttp3.CookieJar
 import okhttp3.HttpUrl
+import com.vbook.reader.engine.VBookEngineException
 import com.vbook.reader.loader.JsLoader
 import java.io.File
+import java.security.MessageDigest
+import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicLong
 import logcat.LogPriority
 import logcat.logcat
 
 class MainActivity : FlutterActivity() {
     private val COOKIE_CHANNEL = "com.vbook.reader/cookie_manager"
     private val ENGINE_CHANNEL = "com.vbook.reader/vbook_engine"
+    private val APP_IDENTITY_CHANNEL = "com.vbook.reader/app_identity"
     
     private val client = OkHttpClient.Builder()
         .connectTimeout(10, java.util.concurrent.TimeUnit.SECONDS)
@@ -29,11 +38,45 @@ class MainActivity : FlutterActivity() {
         .followSslRedirects(true)
         .cookieJar(WebViewCookieJar())
         .build()
-    // Key: pluginId (String from Dart), Value: JsSource
-    private val sources = mutableMapOf<String, JsSource>()
+    private val engineScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private val sourceGenerations = ConcurrentHashMap<String, AtomicLong>()
+    private val sources = ConcurrentHashMap<String, LoadedSource>()
+
+    private data class LoadedSource(
+        val generation: Long,
+        val source: JsSource,
+    )
+
+    private fun nextSourceGeneration(id: String): Long =
+        sourceGenerations.computeIfAbsent(id) { AtomicLong(0L) }.incrementAndGet()
+
+    private fun currentSourceGeneration(id: String): Long =
+        sourceGenerations[id]?.get() ?: 0L
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
+
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, APP_IDENTITY_CHANNEL).setMethodCallHandler { call, result ->
+            when (call.method) {
+                "getGoogleDriveApiKey" -> {
+                    result.success(getString(R.string.vbook_google_drive_api_key).trim())
+                }
+                "getGoogleApiKeyRestrictionHeaders" -> {
+                    val certSha1 = signingCertificateSha1Hex()
+                    if (certSha1 == null) {
+                        result.error("CERT_UNAVAILABLE", "Android signing certificate is unavailable.", null)
+                    } else {
+                        result.success(
+                            mapOf(
+                                "X-Android-Package" to packageName,
+                                "X-Android-Cert" to certSha1
+                            )
+                        )
+                    }
+                }
+                else -> result.notImplemented()
+            }
+        }
         
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, COOKIE_CHANNEL).setMethodCallHandler { call, result ->
             if (call.method == "getCookies") {
@@ -54,10 +97,11 @@ class MainActivity : FlutterActivity() {
                 "loadSource" -> {
                     val id = call.argument<String>("id") ?: return@setMethodCallHandler result.error("INVALID_ID", "Plugin ID is null", null)
                     val dirPath = call.argument<String>("dirPath") ?: return@setMethodCallHandler result.error("INVALID_DIR", "Directory path is null", null)
-                    
-                    sources.remove(id)?.closeEngine()
-                    
-                    CoroutineScope(Dispatchers.IO).launch {
+
+                    val generation = nextSourceGeneration(id)
+                    sources.remove(id)?.source?.closeEngine()
+
+                    engineScope.launch {
                         try {
                             val dir = File(dirPath)
                             if (!dir.exists()) {
@@ -81,52 +125,76 @@ class MainActivity : FlutterActivity() {
                             }
                             
                             val jsSource = extensionInfo.source as JsSource
-                            sources[id] = jsSource
+                            if (currentSourceGeneration(id) != generation) {
+                                jsSource.closeEngine()
+                                withContext(Dispatchers.Main) {
+                                    result.error(
+                                        "EXEC_CANCELLED",
+                                        "Extension load was cancelled because its source session changed.",
+                                        null,
+                                    )
+                                }
+                                return@launch
+                            }
+                            val loadedSource = LoadedSource(generation, jsSource)
+                            sources.put(id, loadedSource)?.source?.closeEngine()
                             
                             logcat(LogPriority.INFO) { "[MainActivity] loadSource: loaded '${jsSource.name}' (engineId=$id, sourceId=${jsSource.id})" }
                             
                             withContext(Dispatchers.Main) { result.success(true) }
                         } catch (e: Exception) {
-                            logcat(LogPriority.ERROR) { "[MainActivity] loadSource exception: ${e.message}\n${e.stackTraceToString()}" }
-                            withContext(Dispatchers.Main) { result.error("LOAD_ERROR", "${e.message}\n${e.stackTraceToString()}", null) }
+                            if (currentSourceGeneration(id) != generation) {
+                                withContext(Dispatchers.Main) {
+                                    result.error(
+                                        "EXEC_CANCELLED",
+                                        "Extension load was cancelled because its source session changed.",
+                                        null,
+                                    )
+                                }
+                            } else {
+                                logcat(LogPriority.ERROR) { "[MainActivity] loadSource failed: ${e::class.simpleName}" }
+                                withContext(Dispatchers.Main) {
+                                    result.error("LOAD_ERROR", "Extension source could not be loaded.", null)
+                                }
+                            }
                         }
                     }
                 }
                 "getPopularManga" -> {
                     val id = call.argument<String>("id") ?: return@setMethodCallHandler result.error("INVALID_ID", "Plugin ID is null", null)
                     val page = call.argument<Int>("page") ?: 1
-                    val source = sources[id] ?: return@setMethodCallHandler result.error("NOT_LOADED", "Source '$id' not loaded. Call loadSource first.", null)
+                    val sourceSession = sources[id] ?: return@setMethodCallHandler result.error("NOT_LOADED", "Source '$id' not loaded. Call loadSource first.", null)
+                    val source = sourceSession.source
                     
-                    CoroutineScope(Dispatchers.IO).launch {
+                    engineScope.launch {
                         try {
                             val mangasPage = source.getPopularManga(page)
                             val jsonList = mangasPage.mangas.map { m ->
                                 mapOf("url" to m.url, "title" to m.title, "thumbnail_url" to m.thumbnail_url, "description" to m.description)
                             }
                             val res = mapOf("mangas" to jsonList, "hasNextPage" to mangasPage.hasNextPage)
-                            withContext(Dispatchers.Main) { result.success(res) }
+                            completeEngineCall(id, sourceSession, result, res)
                         } catch(e: Exception) {
-                            logcat(LogPriority.ERROR) { "[MainActivity] getPopularManga error: ${e.message}" }
-                            withContext(Dispatchers.Main) { result.error("EXEC_ERROR", e.message, null) }
+                            completeEngineFailure("getPopularManga", id, sourceSession, result, e)
                         }
                     }
                 }
                 "getLatestUpdates" -> {
                     val id = call.argument<String>("id") ?: return@setMethodCallHandler result.error("INVALID_ID", "Plugin ID is null", null)
                     val page = call.argument<Int>("page") ?: 1
-                    val source = sources[id] ?: return@setMethodCallHandler result.error("NOT_LOADED", "Source '$id' not loaded. Call loadSource first.", null)
+                    val sourceSession = sources[id] ?: return@setMethodCallHandler result.error("NOT_LOADED", "Source '$id' not loaded. Call loadSource first.", null)
+                    val source = sourceSession.source
                     
-                    CoroutineScope(Dispatchers.IO).launch {
+                    engineScope.launch {
                         try {
                             val mangasPage = source.getLatestUpdates(page)
                             val jsonList = mangasPage.mangas.map { m ->
                                 mapOf("url" to m.url, "title" to m.title, "thumbnail_url" to m.thumbnail_url, "description" to m.description)
                             }
                             val res = mapOf("mangas" to jsonList, "hasNextPage" to mangasPage.hasNextPage)
-                            withContext(Dispatchers.Main) { result.success(res) }
+                            completeEngineCall(id, sourceSession, result, res)
                         } catch(e: Exception) {
-                            logcat(LogPriority.ERROR) { "[MainActivity] getLatestUpdates error: ${e.message}" }
-                            withContext(Dispatchers.Main) { result.error("EXEC_ERROR", e.message, null) }
+                            completeEngineFailure("getLatestUpdates", id, sourceSession, result, e)
                         }
                     }
                 }
@@ -134,9 +202,10 @@ class MainActivity : FlutterActivity() {
                     val id = call.argument<String>("id") ?: return@setMethodCallHandler result.error("INVALID_ID", "Plugin ID is null", null)
                     val page = call.argument<Int>("page") ?: 1
                     val query = call.argument<String>("query") ?: ""
-                    val source = sources[id] ?: return@setMethodCallHandler result.error("NOT_LOADED", "Source '$id' not loaded", null)
+                    val sourceSession = sources[id] ?: return@setMethodCallHandler result.error("NOT_LOADED", "Source '$id' not loaded", null)
+                    val source = sourceSession.source
                     
-                    CoroutineScope(Dispatchers.IO).launch {
+                    engineScope.launch {
                         try {
                             val filters = eu.kanade.tachiyomi.source.model.FilterList()
                             val mangasPage = source.getSearchManga(page, query, filters)
@@ -144,24 +213,23 @@ class MainActivity : FlutterActivity() {
                                 mapOf("url" to m.url, "title" to m.title, "thumbnail_url" to m.thumbnail_url, "description" to m.description)
                             }
                             val res = mapOf("mangas" to jsonList, "hasNextPage" to mangasPage.hasNextPage)
-                            withContext(Dispatchers.Main) { result.success(res) }
+                            completeEngineCall(id, sourceSession, result, res)
                         } catch(e: Exception) {
-                            logcat(LogPriority.ERROR) { "[MainActivity] getSearchManga error: ${e.message}" }
-                            withContext(Dispatchers.Main) { result.error("EXEC_ERROR", e.message, null) }
+                            completeEngineFailure("getSearchManga", id, sourceSession, result, e)
                         }
                     }
                 }
                 "getHomeTabs" -> {
                     val id = call.argument<String>("id") ?: return@setMethodCallHandler result.error("INVALID_ID", "Plugin ID is null", null)
-                    val source = sources[id] ?: return@setMethodCallHandler result.error("NOT_LOADED", "Source '$id' not loaded", null)
+                    val sourceSession = sources[id] ?: return@setMethodCallHandler result.error("NOT_LOADED", "Source '$id' not loaded", null)
+                    val source = sourceSession.source
                     
-                    CoroutineScope(Dispatchers.IO).launch {
+                    engineScope.launch {
                         try {
                             val tabs = source.getHomeTabs()
-                            withContext(Dispatchers.Main) { result.success(tabs) }
+                            completeEngineCall(id, sourceSession, result, tabs)
                         } catch(e: Exception) {
-                            logcat(LogPriority.ERROR) { "[MainActivity] getHomeTabs error: ${e.message}" }
-                            withContext(Dispatchers.Main) { result.error("EXEC_ERROR", e.message, null) }
+                            completeEngineFailure("getHomeTabs", id, sourceSession, result, e)
                         }
                     }
                 }
@@ -170,28 +238,29 @@ class MainActivity : FlutterActivity() {
                     val input = call.argument<String>("input") ?: ""
                     val script = call.argument<String>("script") ?: "gen.js"
                     val page = call.argument<Int>("page") ?: 1
-                    val source = sources[id] ?: return@setMethodCallHandler result.error("NOT_LOADED", "Source '$id' not loaded", null)
+                    val sourceSession = sources[id] ?: return@setMethodCallHandler result.error("NOT_LOADED", "Source '$id' not loaded", null)
+                    val source = sourceSession.source
                     
-                    CoroutineScope(Dispatchers.IO).launch {
+                    engineScope.launch {
                         try {
                             val mangasPage = source.getMangaListByTab(input, script, page)
                             val jsonList = mangasPage.mangas.map { m ->
                                 mapOf("url" to m.url, "title" to m.title, "thumbnail_url" to m.thumbnail_url, "description" to m.description)
                             }
                             val res = mapOf("mangas" to jsonList, "hasNextPage" to mangasPage.hasNextPage)
-                            withContext(Dispatchers.Main) { result.success(res) }
+                            completeEngineCall(id, sourceSession, result, res)
                         } catch(e: Exception) {
-                            logcat(LogPriority.ERROR) { "[MainActivity] getMangaListByTab error: ${e.message}" }
-                            withContext(Dispatchers.Main) { result.error("EXEC_ERROR", e.message, null) }
+                            completeEngineFailure("getMangaListByTab", id, sourceSession, result, e)
                         }
                     }
                 }
                 "getMangaDetails" -> {
                     val id = call.argument<String>("id") ?: return@setMethodCallHandler result.error("INVALID_ID", "Plugin ID is null", null)
                     val url = call.argument<String>("url") ?: ""
-                    val source = sources[id] ?: return@setMethodCallHandler result.error("NOT_LOADED", "Source '$id' not loaded", null)
+                    val sourceSession = sources[id] ?: return@setMethodCallHandler result.error("NOT_LOADED", "Source '$id' not loaded", null)
+                    val source = sourceSession.source
                     
-                    CoroutineScope(Dispatchers.IO).launch {
+                    engineScope.launch {
                         try {
                             val manga = eu.kanade.tachiyomi.source.model.SManga.create().apply { this.url = url }
                             val details = source.getMangaDetails(manga)
@@ -204,60 +273,137 @@ class MainActivity : FlutterActivity() {
                                 "status" to details.status,
                                 "thumbnail_url" to details.thumbnail_url
                             )
-                            withContext(Dispatchers.Main) { result.success(res) }
+                            completeEngineCall(id, sourceSession, result, res)
                         } catch(e: Exception) {
-                            logcat(LogPriority.ERROR) { "[MainActivity] getMangaDetails error: ${e.message}" }
-                            withContext(Dispatchers.Main) { result.error("EXEC_ERROR", e.message, null) }
+                            completeEngineFailure("getMangaDetails", id, sourceSession, result, e)
                         }
                     }
                 }
                 "getChapterList" -> {
                     val id = call.argument<String>("id") ?: return@setMethodCallHandler result.error("INVALID_ID", "Plugin ID is null", null)
                     val url = call.argument<String>("url") ?: ""
-                    val source = sources[id] ?: return@setMethodCallHandler result.error("NOT_LOADED", "Source '$id' not loaded", null)
+                    val sourceSession = sources[id] ?: return@setMethodCallHandler result.error("NOT_LOADED", "Source '$id' not loaded", null)
+                    val source = sourceSession.source
                     
-                    CoroutineScope(Dispatchers.IO).launch {
+                    engineScope.launch {
                         try {
                             val manga = eu.kanade.tachiyomi.source.model.SManga.create().apply { this.url = url }
                             val chapters = source.getChapterList(manga)
                             val jsonList = chapters.map { c ->
                                 mapOf("url" to c.url, "name" to c.name, "date_upload" to c.date_upload)
                             }
-                            withContext(Dispatchers.Main) { result.success(jsonList) }
+                            completeEngineCall(id, sourceSession, result, jsonList)
                         } catch(e: Exception) {
-                            logcat(LogPriority.ERROR) { "[MainActivity] getChapterList error: ${e.message}" }
-                            withContext(Dispatchers.Main) { result.error("EXEC_ERROR", e.message, null) }
+                            completeEngineFailure("getChapterList", id, sourceSession, result, e)
                         }
                     }
                 }
                 "getPageList" -> {
                     val id = call.argument<String>("id") ?: return@setMethodCallHandler result.error("INVALID_ID", "Plugin ID is null", null)
                     val url = call.argument<String>("url") ?: ""
-                    val source = sources[id] ?: return@setMethodCallHandler result.error("NOT_LOADED", "Source '$id' not loaded", null)
+                    val sourceSession = sources[id] ?: return@setMethodCallHandler result.error("NOT_LOADED", "Source '$id' not loaded", null)
+                    val source = sourceSession.source
                     
-                    CoroutineScope(Dispatchers.IO).launch {
+                    engineScope.launch {
                         try {
                             val chapter = eu.kanade.tachiyomi.source.model.SChapter.create().apply { this.url = url }
                             val pages = source.getPageList(chapter)
                             val jsonList = pages.map { p ->
                                 mapOf("index" to p.index, "url" to p.url, "imageUrl" to p.imageUrl)
                             }
-                            withContext(Dispatchers.Main) { result.success(jsonList) }
+                            completeEngineCall(id, sourceSession, result, jsonList)
                         } catch(e: Exception) {
-                            logcat(LogPriority.ERROR) { "[MainActivity] getPageList error: ${e.message}" }
-                            withContext(Dispatchers.Main) { result.error("EXEC_ERROR", e.message, null) }
+                            completeEngineFailure("getPageList", id, sourceSession, result, e)
                         }
                     }
                 }
                 "closeSource" -> {
                     val id = call.argument<String>("id") ?: return@setMethodCallHandler result.error("INVALID_ID", "Plugin ID is null", null)
+                    nextSourceGeneration(id)
                     val source = sources.remove(id)
-                    source?.closeEngine()
+                    source?.source?.closeEngine()
                     result.success(true)
                 }
                 else -> result.notImplemented()
             }
         }
+    }
+
+    override fun onDestroy() {
+        sourceGenerations.values.forEach { it.incrementAndGet() }
+        sources.values.forEach { it.source.closeEngine() }
+        sources.clear()
+        engineScope.cancel()
+        super.onDestroy()
+    }
+
+    private suspend fun completeEngineCall(
+        id: String,
+        sourceSession: LoadedSource,
+        result: MethodChannel.Result,
+        value: Any?,
+    ) {
+        withContext(Dispatchers.Main) {
+            if (sources[id] !== sourceSession) {
+                result.error(
+                    "EXEC_CANCELLED",
+                    "Extension execution was cancelled because its source session changed.",
+                    null,
+                )
+            } else {
+                result.success(value)
+            }
+        }
+    }
+
+    private suspend fun completeEngineFailure(
+        operation: String,
+        id: String,
+        sourceSession: LoadedSource,
+        result: MethodChannel.Result,
+        error: Exception,
+    ) {
+        val engineError = error as? VBookEngineException
+        val code = engineError?.platformCode ?: "JS_ERROR"
+        val message = engineError?.message ?: "Extension JavaScript failed while running '$operation'."
+        logcat(LogPriority.ERROR) { "[MainActivity] $operation failed with code=$code" }
+
+        withContext(Dispatchers.Main) {
+            if (sources[id] !== sourceSession) {
+                result.error(
+                    "EXEC_CANCELLED",
+                    "Extension execution was cancelled because its source session changed.",
+                    null,
+                )
+            } else {
+                result.error(code, message, null)
+            }
+        }
+    }
+
+    @Suppress("DEPRECATION")
+    private fun signingCertificateSha1Hex(): String? {
+        val signatures = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            val packageInfo = packageManager.getPackageInfo(
+                packageName,
+                PackageManager.GET_SIGNING_CERTIFICATES
+            )
+            val signingInfo = packageInfo.signingInfo ?: return null
+            val signerArray = if (signingInfo.hasMultipleSigners()) {
+                signingInfo.apkContentsSigners
+            } else {
+                signingInfo.signingCertificateHistory
+            }
+            signerArray ?: return null
+        } else {
+            packageManager.getPackageInfo(
+                packageName,
+                PackageManager.GET_SIGNATURES
+            ).signatures ?: return null
+        }
+        val signature = signatures.firstOrNull() ?: return null
+        val digest = MessageDigest.getInstance("SHA-1").digest(signature.toByteArray())
+        return digest.joinToString(separator = "") { byte -> "%02X".format(byte) }
     }
 }
 

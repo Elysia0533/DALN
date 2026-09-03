@@ -10,8 +10,11 @@ import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.MediaType.Companion.toMediaTypeOrNull
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import okhttp3.Response
+import okhttp3.ResponseBody
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.jsoup.Jsoup
+import java.io.ByteArrayOutputStream
 
 class JsEnvironment(
     private val client: OkHttpClient,
@@ -78,56 +81,61 @@ class JsEnvironment(
             }
 
             requestBuilder.method(method, requestBody)
-            val response = client.newCall(requestBuilder.build()).execute()
-            var bodyContent = response.body?.string() ?: ""
+            client.newCall(requestBuilder.build()).execute().use { response ->
+                val bodyContent = readTextBody(response)
 
-            // Nếu request không thành công (403, 404, 503) hoặc rỗng đối với Hako/DocLN hoặc TruyenQQ, thử fallback domain
-            if ((!response.isSuccessful || bodyContent.isBlank()) && (finalUrl.contains("hako") || finalUrl.contains("docln"))) {
-                val fallbackUrl = finalUrl.replace(Regex("https?://[^/]+"), "https://docln.sbs")
-                if (fallbackUrl != finalUrl) {
-                    logcat { "Retrying fetch with fallback domain docln.sbs: $fallbackUrl" }
-                    val fallbackRequest = requestBuilder.url(fallbackUrl).build()
-                    val fallbackResponse = client.newCall(fallbackRequest).execute()
-                    if (fallbackResponse.isSuccessful) {
-                        val fallbackContent = fallbackResponse.body?.string() ?: ""
-                        if (fallbackContent.isNotBlank()) {
-                            return JsResponse(
-                                ok = true,
-                                status = fallbackResponse.code,
-                                headers = fallbackResponse.headers.toMultimap().mapValues { it.value.joinToString(", ") },
-                                content = fallbackContent,
-                            )
+                // Nếu request không thành công (403, 404, 503) hoặc rỗng đối với Hako/DocLN hoặc TruyenQQ, thử fallback domain
+                if ((!response.isSuccessful || bodyContent.isBlank()) && (finalUrl.contains("hako") || finalUrl.contains("docln"))) {
+                    val fallbackUrl = finalUrl.replace(Regex("https?://[^/]+"), "https://docln.sbs")
+                    if (fallbackUrl != finalUrl) {
+                        logcat { "Retrying extension request with fallback host docln.sbs" }
+                        val fallbackRequest = requestBuilder.url(fallbackUrl).build()
+                        client.newCall(fallbackRequest).execute().use { fallbackResponse ->
+                            if (fallbackResponse.isSuccessful) {
+                                val fallbackContent = readTextBody(fallbackResponse)
+                                if (fallbackContent.isNotBlank()) {
+                                    return JsResponse(
+                                        ok = true,
+                                        status = fallbackResponse.code,
+                                        headers = fallbackResponse.headers.toMultimap().mapValues { it.value.joinToString(", ") },
+                                        content = fallbackContent,
+                                    )
+                                }
+                            }
+                        }
+                    }
+                } else if ((!response.isSuccessful || bodyContent.isBlank()) && finalUrl.contains("truyenqq")) {
+                    val fallbackUrl = finalUrl.replace(Regex("https?://[^/]+"), "https://truyenqqto.com")
+                    if (fallbackUrl != finalUrl) {
+                        logcat { "Retrying extension request with fallback host truyenqqto.com" }
+                        val fallbackRequest = requestBuilder.url(fallbackUrl).build()
+                        client.newCall(fallbackRequest).execute().use { fallbackResponse ->
+                            if (fallbackResponse.isSuccessful) {
+                                val fallbackContent = readTextBody(fallbackResponse)
+                                if (fallbackContent.isNotBlank()) {
+                                    return JsResponse(
+                                        ok = true,
+                                        status = fallbackResponse.code,
+                                        headers = fallbackResponse.headers.toMultimap().mapValues { it.value.joinToString(", ") },
+                                        content = fallbackContent,
+                                    )
+                                }
+                            }
                         }
                     }
                 }
-            } else if ((!response.isSuccessful || bodyContent.isBlank()) && finalUrl.contains("truyenqq")) {
-                val fallbackUrl = finalUrl.replace(Regex("https?://[^/]+"), "https://truyenqqto.com")
-                if (fallbackUrl != finalUrl) {
-                    logcat { "Retrying fetch with fallback domain truyenqqto.com: $fallbackUrl" }
-                    val fallbackRequest = requestBuilder.url(fallbackUrl).build()
-                    val fallbackResponse = client.newCall(fallbackRequest).execute()
-                    if (fallbackResponse.isSuccessful) {
-                        val fallbackContent = fallbackResponse.body?.string() ?: ""
-                        if (fallbackContent.isNotBlank()) {
-                            return JsResponse(
-                                ok = true,
-                                status = fallbackResponse.code,
-                                headers = fallbackResponse.headers.toMultimap().mapValues { it.value.joinToString(", ") },
-                                content = fallbackContent,
-                            )
-                        }
-                    }
-                }
+
+                JsResponse(
+                    ok = response.isSuccessful,
+                    status = response.code,
+                    headers = response.headers.toMultimap().mapValues { it.value.joinToString(", ") },
+                    content = bodyContent,
+                )
             }
-
-            JsResponse(
-                ok = response.isSuccessful,
-                status = response.code,
-                headers = response.headers.toMultimap().mapValues { it.value.joinToString(", ") },
-                content = bodyContent,
-            )
+        } catch (e: VBookEngineException) {
+            throw e
         } catch (e: Exception) {
-            logcat { "Fetch error: ${e.message}" }
+            logcat { "Extension request failed: ${e::class.simpleName}" }
             // Thử fallback trực tiếp nếu gặp lỗi kết nối (UnknownHost/Connect)
             if (url.contains("hako") || url.contains("docln")) {
                 try {
@@ -135,12 +143,15 @@ class JsEnvironment(
                     val headersBuilder = defaultHeaders.newBuilder()
                     options.headers.forEach { (k, v) -> headersBuilder.set(k, v) }
                     val req = Request.Builder().url(fallbackUrl).headers(headersBuilder.build()).build()
-                    val res = client.newCall(req).execute()
-                    if (res.isSuccessful) {
-                        return JsResponse(true, res.code, res.headers.toMultimap().mapValues { it.value.joinToString(", ") }, res.body?.string() ?: "")
+                    client.newCall(req).execute().use { res ->
+                        if (res.isSuccessful) {
+                            return JsResponse(true, res.code, res.headers.toMultimap().mapValues { it.value.joinToString(", ") }, readTextBody(res))
+                        }
                     }
+                } catch (fe: VBookEngineException) {
+                    throw fe
                 } catch (fe: Exception) {
-                    logcat { "Fallback fetch also error: ${fe.message}" }
+                    logcat { "Extension fallback request failed: ${fe::class.simpleName}" }
                 }
             } else if (url.contains("truyenqq")) {
                 try {
@@ -148,29 +159,72 @@ class JsEnvironment(
                     val headersBuilder = defaultHeaders.newBuilder()
                     options.headers.forEach { (k, v) -> headersBuilder.set(k, v) }
                     val req = Request.Builder().url(fallbackUrl).headers(headersBuilder.build()).build()
-                    val res = client.newCall(req).execute()
-                    if (res.isSuccessful) {
-                        return JsResponse(true, res.code, res.headers.toMultimap().mapValues { it.value.joinToString(", ") }, res.body?.string() ?: "")
+                    client.newCall(req).execute().use { res ->
+                        if (res.isSuccessful) {
+                            return JsResponse(true, res.code, res.headers.toMultimap().mapValues { it.value.joinToString(", ") }, readTextBody(res))
+                        }
                     }
+                } catch (fe: VBookEngineException) {
+                    throw fe
                 } catch (fe: Exception) {
-                    logcat { "Fallback fetch also error: ${fe.message}" }
+                    logcat { "Extension fallback request failed: ${fe::class.simpleName}" }
                 }
             }
-            JsResponse(false, 500, emptyMap(), "")
+            throw JsNetworkException(e)
         }
     }
 
     /** Fetch raw bytes (used for base64 encoding — cuutruyen image decryption etc.) */
     fun fetchBytes(url: String, options: JsRequestOptions = JsRequestOptions()): ByteArray {
-        val finalUrl = buildUrl(url, options.queries)
-        val headersBuilder = defaultHeaders.newBuilder()
-        options.headers.forEach { (key, value) -> headersBuilder.set(key, value) }
-        val request = Request.Builder()
-            .url(finalUrl)
-            .headers(headersBuilder.build())
-            .build()
-        return client.newCall(request).execute().use { response ->
-            response.body?.bytes() ?: ByteArray(0)
+        return try {
+            val finalUrl = buildUrl(url, options.queries)
+            val headersBuilder = defaultHeaders.newBuilder()
+            options.headers.forEach { (key, value) -> headersBuilder.set(key, value) }
+            val request = Request.Builder()
+                .url(finalUrl)
+                .headers(headersBuilder.build())
+                .build()
+            client.newCall(request).execute().use { response ->
+                response.body?.let(::readLimitedBytes) ?: ByteArray(0)
+            }
+        } catch (e: VBookEngineException) {
+            throw e
+        } catch (e: Exception) {
+            throw JsNetworkException(e)
+        }
+    }
+
+    private fun readTextBody(response: Response): String {
+        val body = response.body ?: return ""
+        val bytes = readLimitedBytes(body)
+        val charset = body.contentType()?.charset(Charsets.UTF_8) ?: Charsets.UTF_8
+        return bytes.toString(charset)
+    }
+
+    private fun readLimitedBytes(body: ResponseBody): ByteArray {
+        val contentLength = body.contentLength()
+        if (contentLength > MAX_RESPONSE_BYTES) {
+            throw JsResourceLimitException("network response")
+        }
+
+        val initialSize = when {
+            contentLength <= 0L -> DEFAULT_RESPONSE_BUFFER_BYTES
+            else -> minOf(contentLength, MAX_RESPONSE_BYTES).toInt()
+        }
+        return body.byteStream().use { input ->
+            val output = ByteArrayOutputStream(initialSize)
+            val buffer = ByteArray(RESPONSE_BUFFER_BYTES)
+            var total = 0
+            while (true) {
+                val read = input.read(buffer)
+                if (read == -1) break
+                total += read
+                if (total > MAX_RESPONSE_BYTES) {
+                    throw JsResourceLimitException("network response")
+                }
+                output.write(buffer, 0, read)
+            }
+            output.toByteArray()
         }
     }
 
@@ -205,6 +259,12 @@ class JsEnvironment(
     private fun JsonElement.asRequestValue(): String = when (this) {
         is JsonPrimitive -> content
         else -> toString()
+    }
+
+    companion object {
+        private const val MAX_RESPONSE_BYTES = 16 * 1024 * 1024L
+        private const val DEFAULT_RESPONSE_BUFFER_BYTES = 32 * 1024
+        private const val RESPONSE_BUFFER_BYTES = 8 * 1024
     }
 }
 

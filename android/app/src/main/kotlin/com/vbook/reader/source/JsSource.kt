@@ -5,6 +5,9 @@ import eu.kanade.tachiyomi.source.model.MangasPage
 import eu.kanade.tachiyomi.source.model.Page
 import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
+import com.vbook.reader.engine.JsResultParseException
+import com.vbook.reader.engine.JsScriptException
+import com.vbook.reader.engine.VBookEngineException
 import com.vbook.reader.engine.VBookEngine
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
@@ -41,6 +44,37 @@ class JsSource(
     override val supportsLatest: Boolean = scripts.containsKey("home")
 
     private val json = Json { ignoreUnknownKeys = true }
+
+    private fun requireResult(result: String?, operation: String): String {
+        if (result.isNullOrBlank() || result == "null") {
+            throw JsResultParseException(operation)
+        }
+        return result
+    }
+
+    private fun parseResponseObject(result: String?, operation: String): JsonObject {
+        val payload = requireResult(result, operation)
+        return try {
+            val response = json.parseToJsonElement(payload) as? JsonObject
+                ?: throw JsResultParseException(operation)
+            if (response["data"] == null && response["error"] != null) {
+                throw JsScriptException(operation)
+            }
+            response
+        } catch (e: VBookEngineException) {
+            throw e
+        } catch (e: Exception) {
+            throw JsResultParseException(operation, e)
+        }
+    }
+
+    private fun parseDataArray(result: String?, operation: String): JsonArray {
+        val response = parseResponseObject(result, operation)
+        return response["data"] as? JsonArray ?: throw JsResultParseException(operation)
+    }
+
+    private fun requireData(response: JsonObject, operation: String) =
+        response["data"] ?: throw JsResultParseException(operation)
 
     val headers: okhttp3.Headers = okhttp3.Headers.Builder()
         .add("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
@@ -167,11 +201,13 @@ class JsSource(
 
     override suspend fun getMangaDetails(manga: SManga): SManga {
         val script = scripts["detail"] ?: return manga
-        val result = engine.execute(script, "execute", manga.url) ?: return manga
+        val result = engine.execute(script, "execute", manga.url)
 
         return try {
-            val jsonResult = json.parseToJsonElement(result).jsonObject
-            val data = jsonResult["data"]?.jsonObject ?: return manga
+            val data = requireData(
+                parseResponseObject(result, "manga details"),
+                "manga details",
+            ) as? JsonObject ?: throw JsResultParseException("manga details")
 
             manga.apply {
                 val parsedTitle = data["name"]?.stringValue() ?: data["title"]?.stringValue()
@@ -227,21 +263,21 @@ class JsSource(
                     else -> SManga.UNKNOWN
                 }
             }
+        } catch (e: VBookEngineException) {
+            throw e
         } catch (e: Exception) {
-            logcat(LogPriority.ERROR) { "[JsSource:$name] getMangaDetails error: ${e.message}" }
-            manga
+            throw JsResultParseException("manga details", e)
         }
     }
 
     // ─── getChapterList ───────────────────────────────────────────────────────
 
     override suspend fun getChapterList(manga: SManga): List<SChapter> {
-        val script = scripts["toc"] ?: return emptyList()
-        val result = engine.execute(script, "execute", manga.url) ?: return emptyList()
+        val script = scripts["toc"] ?: throw JsScriptException("chapter list")
+        val result = engine.execute(script, "execute", manga.url)
 
         return try {
-            val jsonResult = json.parseToJsonElement(result).jsonObject
-            val chaptersJson = jsonResult["data"]?.asJsonArray() ?: return emptyList()
+            val chaptersJson = parseDataArray(result, "chapter list")
 
             chaptersJson.mapNotNull { el ->
                 val o = el as? JsonObject ?: return@mapNotNull null
@@ -257,9 +293,10 @@ class JsSource(
                     date_upload = o["date"]?.jsonPrimitive?.longOrNull ?: 0L
                 }
             }
+        } catch (e: VBookEngineException) {
+            throw e
         } catch (e: Exception) {
-            logcat(LogPriority.ERROR) { "[JsSource:$name] getChapterList error: ${e.message}" }
-            emptyList()
+            throw JsResultParseException("chapter list", e)
         }
     }
 
@@ -275,59 +312,53 @@ class JsSource(
      */
     private suspend fun resolveScriptPage(pageViewerUrl: String, scriptName: String): String? {
         val key = scriptName.substringBeforeLast(".")
-        val subScript = scripts[key] ?: run {
-            logcat(LogPriority.WARN) { "[JsSource:$name] sub-script '$key' not found" }
-            return null
-        }
-        val result = engine.execute(subScript, "execute", pageViewerUrl) ?: return null
+        val subScript = scripts[key] ?: throw JsScriptException("page resolver")
+        val result = requireResult(
+            engine.execute(subScript, "execute", pageViewerUrl),
+            "page resolver",
+        )
 
         // Sub-script có thể trả về:
         //  (a) JSON format: {"data": "https://...", ...}
         //  (b) Plain URL string: "https://..."
         //  (c) null / empty → failed
         val trimmed = result.trim()
-        if (trimmed.isBlank() || trimmed == "null") return null
+        if (trimmed.isBlank() || trimmed == "null") {
+            throw JsResultParseException("page resolver")
+        }
 
         // Thử parse JSON trước
         return try {
             val jsonResult = json.parseToJsonElement(trimmed)
-            when {
-                jsonResult is kotlinx.serialization.json.JsonObject -> {
+            when (jsonResult) {
+                is kotlinx.serialization.json.JsonObject -> {
                     // {"data": "url"} hoặc {"data": {"url": "..."} }
                     val dataEl = jsonResult["data"]
                     dataEl?.stringValue()
                         ?: (dataEl as? kotlinx.serialization.json.JsonObject)?.let {
                             it["url"]?.stringValue() ?: it["src"]?.stringValue()
                         }
+                        ?: throw JsResultParseException("page resolver")
                 }
-                jsonResult is kotlinx.serialization.json.JsonPrimitive -> jsonResult.content.takeIf { it.isNotBlank() }
-                else -> null
+                is kotlinx.serialization.json.JsonPrimitive -> jsonResult.content.takeIf { it.isNotBlank() }
+                    ?: throw JsResultParseException("page resolver")
+                else -> throw JsResultParseException("page resolver")
             }
-        } catch (_: Exception) {
+        } catch (e: VBookEngineException) {
+            throw e
+        } catch (e: Exception) {
             // Không phải JSON → treat as raw URL
-            if (trimmed.startsWith("http")) trimmed else null
+            if (trimmed.startsWith("http")) trimmed else throw JsResultParseException("page resolver", e)
         }
     }
 
     override suspend fun getPageList(chapter: SChapter): List<Page> {
-        val script = scripts["chap"] ?: run {
-            logcat(LogPriority.WARN) { "[JsSource:$name] Không có script 'chap'" }
-            return emptyList()
-        }
+        val script = scripts["chap"] ?: throw JsScriptException("chapter content")
         val result = engine.execute(script, "execute", chapter.url)
-        if (result == null) {
-            logcat(LogPriority.ERROR) { "[JsSource:$name] execute() trả null cho chapter: ${chapter.url}" }
-            return emptyList()
-        }
-
-        logcat(LogPriority.DEBUG) { "[JsSource:$name] getPageList raw (${result.length} chars): ${result.take(800)}" }
 
         return try {
-            val jsonResult = json.parseToJsonElement(result).jsonObject
-            val dataElement = jsonResult["data"] ?: run {
-                logcat(LogPriority.WARN) { "[JsSource:$name] Không có field 'data'. Keys: ${jsonResult.keys}" }
-                return emptyList()
-            }
+            val jsonResult = parseResponseObject(result, "chapter content")
+            val dataElement = requireData(jsonResult, "chapter content")
 
             when {
                 // ── Case A: data là JsonArray ─────────────────────────────────
@@ -378,7 +409,7 @@ class JsSource(
                         logcat(LogPriority.DEBUG) { "[JsSource:$name] Parsed ${pages.size} image pages from array" }
                         return pages
                     }
-                    emptyList()
+                    throw JsResultParseException("chapter content")
                 }
 
                 // ── Case B: data là JsonPrimitive (string) ────────────────────
@@ -435,18 +466,15 @@ class JsSource(
                         return listOf(Page(0, chapter.url, "vbook-text://${longestText.second}"))
                     }
 
-                    logcat(LogPriority.WARN) { "[JsSource:$name] data object không nhận ra format. Keys: ${dataElement.keys}" }
-                    emptyList()
+                    throw JsResultParseException("chapter content")
                 }
 
-                else -> {
-                    logcat(LogPriority.WARN) { "[JsSource:$name] data type không xử lý được: ${dataElement::class.simpleName}" }
-                    emptyList()
-                }
+                else -> throw JsResultParseException("chapter content")
             }
+        } catch (e: VBookEngineException) {
+            throw e
         } catch (e: Exception) {
-            logcat(LogPriority.ERROR) { "[JsSource:$name] getPageList exception: ${e.message}\nResult: ${result.take(500)}" }
-            emptyList()
+            throw JsResultParseException("chapter content", e)
         }
     }
 
@@ -462,17 +490,17 @@ class JsSource(
         if (latestScript != null) {
             return try {
                 val result = engine.execute(latestScript, "execute", page.toString())
-                    ?: return MangasPage(emptyList(), false)
-                val jsonResult = json.parseToJsonElement(result).jsonObject
-                val mangasJson = jsonResult["data"]?.asJsonArray() ?: return MangasPage(emptyList(), false)
+                val jsonResult = parseResponseObject(result, "latest updates")
+                val mangasJson = parseDataArray(result, "latest updates")
                 val hasNext = jsonResult["next"].let {
                     it != null && it !is JsonNull && it.stringValue()?.isNotBlank() == true
                 }
                 val mangas = mangasJson.mapNotNull { (it as? JsonObject)?.let(::buildMangaFromJson) }
                 MangasPage(mangas, hasNext)
+            } catch (e: VBookEngineException) {
+                throw e
             } catch (e: Exception) {
-                logcat(LogPriority.ERROR) { "[JsSource:$name] getLatestUpdates (latest.js) error: ${e.message}" }
-                MangasPage(emptyList(), false)
+                throw JsResultParseException("latest updates", e)
             }
         }
 
@@ -481,7 +509,7 @@ class JsSource(
     }
 
     private suspend fun fetchMangaListFromHome(page: Int, isLatest: Boolean): MangasPage {
-        val script = scripts["home"] ?: return MangasPage(emptyList(), false)
+        val script = scripts["home"] ?: throw JsScriptException("home listing")
         var homeResult = if (baseUrl.isNotBlank()) engine.execute(script, "execute", baseUrl, page.toString()) else null
         if (homeResult.isNullOrBlank() || homeResult == "null") {
             homeResult = engine.execute(script, "execute", page.toString())
@@ -489,15 +517,16 @@ class JsSource(
         if (homeResult.isNullOrBlank() || homeResult == "null") {
             homeResult = engine.execute(script, "execute")
         }
-        if (homeResult.isNullOrBlank()) return MangasPage(emptyList(), false)
+        val finalHomeResult = requireResult(homeResult, "home listing")
 
         return try {
-            val jsonResult = json.parseToJsonElement(homeResult).jsonObject
-            val data = jsonResult["data"]?.asJsonArray() ?: return MangasPage(emptyList(), false)
+            val jsonResult = parseResponseObject(finalHomeResult, "home listing")
+            val data = parseDataArray(finalHomeResult, "home listing")
             if (data.isEmpty()) return MangasPage(emptyList(), false)
 
             // Kiểm tra phần tử đầu tiên để biết data là mảng Tab hay mảng Manga
-            val firstItem = data.getOrNull(0) as? JsonObject ?: return MangasPage(emptyList(), false)
+            val firstItem = data.getOrNull(0) as? JsonObject
+                ?: throw JsResultParseException("home listing")
             val isManga = firstItem.containsKey("cover") || firstItem.containsKey("img") || firstItem.containsKey("thumbnail") || (firstItem.containsKey("name") && firstItem.containsKey("host"))
 
             if (!isManga) {
@@ -520,7 +549,7 @@ class JsSource(
 
                 val tabToUse = data.getOrNull(tabIndex) as? JsonObject
                     ?: data.getOrNull(0) as? JsonObject
-                    ?: return MangasPage(emptyList(), false)
+                    ?: throw JsResultParseException("home listing")
 
                 val tabInput = tabToUse["input"]?.stringValue()
                     ?: tabToUse["url"]?.stringValue()
@@ -530,19 +559,17 @@ class JsSource(
                 val scriptKey = tabScriptName.substringBeforeLast(".")
                 val tabScript = scripts[scriptKey] ?: scripts["gen"] ?: scripts["home"] ?: scripts.values.firstOrNull()
 
-                if (tabScript != null) {
-                    val tabResult = engine.execute(tabScript, "execute", tabInput, page.toString())
-                        ?: return MangasPage(emptyList(), false)
-
-                    val tabJsonResult = json.parseToJsonElement(tabResult).jsonObject
-                    val mangasJson = tabJsonResult["data"]?.asJsonArray() ?: return MangasPage(emptyList(), false)
-                    val hasNext = tabJsonResult["next"].let {
-                        it != null && it !is JsonNull && it.stringValue()?.isNotBlank() == true
-                    }
-                    val mangas = mangasJson.mapNotNull { (it as? JsonObject)?.let(::buildMangaFromJson) }
-                    return MangasPage(mangas, hasNext)
+                if (tabScript == null) {
+                    throw JsScriptException("home tab listing")
                 }
-                return MangasPage(emptyList(), false)
+                val tabResult = engine.execute(tabScript, "execute", tabInput, page.toString())
+                val tabJsonResult = parseResponseObject(tabResult, "home tab listing")
+                val mangasJson = parseDataArray(tabResult, "home tab listing")
+                val hasNext = tabJsonResult["next"].let {
+                    it != null && it !is JsonNull && it.stringValue()?.isNotBlank() == true
+                }
+                val mangas = mangasJson.mapNotNull { (it as? JsonObject)?.let(::buildMangaFromJson) }
+                return MangasPage(mangas, hasNext)
             }
 
             // Nếu home.js trả về danh sách manga trực tiếp
@@ -551,9 +578,10 @@ class JsSource(
                 it != null && it !is JsonNull && it.stringValue()?.isNotBlank() == true
             }
             MangasPage(mangas, hasNext)
+        } catch (e: VBookEngineException) {
+            throw e
         } catch (e: Exception) {
-            logcat(LogPriority.ERROR) { "[JsSource:$name] fetchMangaListFromHome error: ${e.message}" }
-            MangasPage(emptyList(), false)
+            throw JsResultParseException("home listing", e)
         }
     }
 
@@ -562,19 +590,19 @@ class JsSource(
     override suspend fun getSearchManga(page: Int, query: String, filters: eu.kanade.tachiyomi.source.model.FilterList): MangasPage {
         val script = scripts["search"] ?: return MangasPage(emptyList(), false)
         val result = engine.execute(script, "execute", query, page.toString())
-            ?: return MangasPage(emptyList(), false)
 
         return try {
-            val jsonResult = json.parseToJsonElement(result).jsonObject
-            val mangasJson = jsonResult["data"]?.asJsonArray() ?: return MangasPage(emptyList(), false)
+            val jsonResult = parseResponseObject(result, "search")
+            val mangasJson = parseDataArray(result, "search")
             val hasNext = jsonResult["next"].let {
                 it != null && it !is JsonNull && it.stringValue()?.isNotBlank() == true
             }
             val mangas = mangasJson.mapNotNull { (it as? JsonObject)?.let(::buildMangaFromJson) }
             MangasPage(mangas, hasNext)
+        } catch (e: VBookEngineException) {
+            throw e
         } catch (e: Exception) {
-            logcat(LogPriority.ERROR) { "[JsSource:$name] getSearchManga error: ${e.message}" }
-            MangasPage(emptyList(), false)
+            throw JsResultParseException("search", e)
         }
     }
 
@@ -584,11 +612,10 @@ class JsSource(
         if (homeResult.isNullOrBlank() || homeResult == "null") {
             homeResult = engine.execute(script, "execute")
         }
-        if (homeResult.isNullOrBlank()) return emptyList()
+        val finalHomeResult = requireResult(homeResult, "home tabs")
 
         return try {
-            val jsonResult = json.parseToJsonElement(homeResult).jsonObject
-            val data = jsonResult["data"]?.asJsonArray() ?: return emptyList()
+            val data = parseDataArray(finalHomeResult, "home tabs")
             data.mapNotNull { el ->
                 val o = el as? JsonObject ?: return@mapNotNull null
                 val title = o["title"]?.stringValue() ?: o["name"]?.stringValue() ?: return@mapNotNull null
@@ -596,29 +623,30 @@ class JsSource(
                 val scriptName = o["script"]?.stringValue() ?: "gen.js"
                 mapOf("title" to title, "input" to input, "script" to scriptName)
             }
+        } catch (e: VBookEngineException) {
+            throw e
         } catch (e: Exception) {
-            logcat(LogPriority.ERROR) { "[JsSource:$name] getHomeTabs error: ${e.message}" }
-            emptyList()
+            throw JsResultParseException("home tabs", e)
         }
     }
 
     suspend fun getMangaListByTab(tabInput: String, tabScriptName: String, page: Int): MangasPage {
         val scriptKey = tabScriptName.substringBeforeLast(".")
         val tabScript = scripts[scriptKey] ?: scripts["gen"] ?: scripts["home"] ?: scripts.values.firstOrNull()
-            ?: return MangasPage(emptyList(), false)
+            ?: throw JsScriptException("tab listing")
         val tabResult = engine.execute(tabScript, "execute", tabInput, page.toString())
-            ?: return MangasPage(emptyList(), false)
         return try {
-            val tabJsonResult = json.parseToJsonElement(tabResult).jsonObject
-            val mangasJson = tabJsonResult["data"]?.asJsonArray() ?: return MangasPage(emptyList(), false)
+            val tabJsonResult = parseResponseObject(tabResult, "tab listing")
+            val mangasJson = parseDataArray(tabResult, "tab listing")
             val hasNext = tabJsonResult["next"].let {
                 it != null && it !is JsonNull && it.stringValue()?.isNotBlank() == true
             }
             val mangas = mangasJson.mapNotNull { (it as? JsonObject)?.let(::buildMangaFromJson) }
             MangasPage(mangas, hasNext)
+        } catch (e: VBookEngineException) {
+            throw e
         } catch (e: Exception) {
-            logcat(LogPriority.ERROR) { "[JsSource:$name] getMangaListByTab error: ${e.message}" }
-            MangasPage(emptyList(), false)
+            throw JsResultParseException("tab listing", e)
         }
     }
 }

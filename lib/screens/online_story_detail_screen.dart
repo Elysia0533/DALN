@@ -27,7 +27,8 @@ class OnlineStoryDetailScreen extends StatefulWidget {
   });
 
   @override
-  State<OnlineStoryDetailScreen> createState() => _OnlineStoryDetailScreenState();
+  State<OnlineStoryDetailScreen> createState() =>
+      _OnlineStoryDetailScreenState();
 }
 
 class _OnlineStoryDetailScreenState extends State<OnlineStoryDetailScreen> {
@@ -58,7 +59,10 @@ class _OnlineStoryDetailScreenState extends State<OnlineStoryDetailScreen> {
       final dirPath = await PluginLoader.getPluginDir(widget.plugin.id);
       await VBookEngineChannel.loadSource(widget.plugin.id, dirPath);
 
-      final detail = await VBookEngineChannel.getMangaDetails(widget.plugin.id, widget.storyUrl);
+      final detail = await VBookEngineChannel.getMangaDetails(
+        widget.plugin.id,
+        widget.storyUrl,
+      );
       if (mounted) {
         setState(() {
           _detail = detail;
@@ -66,7 +70,10 @@ class _OnlineStoryDetailScreenState extends State<OnlineStoryDetailScreen> {
         });
       }
 
-      final chapterData = await VBookEngineChannel.getChapterList(widget.plugin.id, widget.storyUrl);
+      final chapterData = await VBookEngineChannel.getChapterList(
+        widget.plugin.id,
+        widget.storyUrl,
+      );
       if (mounted) {
         setState(() {
           _chapters = chapterData;
@@ -86,7 +93,11 @@ class _OnlineStoryDetailScreenState extends State<OnlineStoryDetailScreen> {
 
   Future<void> _checkIfAdded() async {
     final stories = await ApiService.fetchPersonalStories();
-    final exists = stories.any((s) => s.storyUrl == widget.storyUrl || (s.pluginId == widget.plugin.id && s.title == widget.initialTitle));
+    final exists = stories.any(
+      (s) =>
+          s.storyUrl == widget.storyUrl ||
+          (s.pluginId == widget.plugin.id && s.title == widget.initialTitle),
+    );
     if (mounted && exists) {
       setState(() => _addedToLibrary = true);
     }
@@ -97,10 +108,18 @@ class _OnlineStoryDetailScreenState extends State<OnlineStoryDetailScreen> {
     setState(() => _isAddingToLibrary = true);
 
     try {
-      final title = (_detail?.title.trim().isNotEmpty == true) ? _detail!.title : widget.initialTitle;
-      final cover = (_detail?.thumbnailUrl.trim().isNotEmpty == true) ? _detail!.thumbnailUrl : widget.initialCover;
-      final author = (_detail?.author.trim().isNotEmpty == true) ? _detail!.author : '';
-      final desc = (_detail?.description.trim().isNotEmpty == true) ? _detail!.description : '';
+      final title = (_detail?.title.trim().isNotEmpty == true)
+          ? _detail!.title
+          : widget.initialTitle;
+      final cover = (_detail?.thumbnailUrl.trim().isNotEmpty == true)
+          ? _detail!.thumbnailUrl
+          : widget.initialCover;
+      final author = (_detail?.author.trim().isNotEmpty == true)
+          ? _detail!.author
+          : '';
+      final desc = (_detail?.description.trim().isNotEmpty == true)
+          ? _detail!.description
+          : '';
       final genres = (_detail?.genre ?? '')
           .split(',')
           .map((g) => g.trim())
@@ -141,7 +160,9 @@ class _OnlineStoryDetailScreenState extends State<OnlineStoryDetailScreen> {
         setState(() => _isAddingToLibrary = false);
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('Lỗi: ${e.toString().replaceFirst("Exception: ", "")}'),
+            content: Text(
+              'Lỗi: ${e.toString().replaceFirst("Exception: ", "")}',
+            ),
             backgroundColor: Colors.red,
             behavior: SnackBarBehavior.floating,
           ),
@@ -151,16 +172,16 @@ class _OnlineStoryDetailScreenState extends State<OnlineStoryDetailScreen> {
   }
 
   Future<void> _openBrowser() async {
-    final baseUrl = widget.plugin.source.isNotEmpty && widget.plugin.source.startsWith('http')
+    final baseUrl =
+        widget.plugin.source.isNotEmpty &&
+            widget.plugin.source.startsWith('http')
         ? widget.plugin.source
         : widget.storyUrl;
     await Navigator.push(
       context,
       MaterialPageRoute(
-        builder: (_) => WebBrowserScreen(
-          initialUrl: baseUrl,
-          title: widget.plugin.name,
-        ),
+        builder: (_) =>
+            WebBrowserScreen(initialUrl: baseUrl, title: widget.plugin.name),
       ),
     );
     if (mounted) {
@@ -187,7 +208,9 @@ class _OnlineStoryDetailScreenState extends State<OnlineStoryDetailScreen> {
       context: context,
       builder: (ctx) => AlertDialog(
         title: const Text('Tải truyện Offline'),
-        content: Text('Xác nhận tải toàn bộ ${_chapters.length} chương của "$storyTitle" về đọc ngoại tuyến?'),
+        content: Text(
+          'Xác nhận tải toàn bộ ${_chapters.length} chương của "$storyTitle" về đọc ngoại tuyến?',
+        ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(ctx, false),
@@ -244,15 +267,26 @@ class _OnlineStoryDetailScreenState extends State<OnlineStoryDetailScreen> {
                         Icon(
                           isDone
                               ? Icons.check_circle_rounded
-                              : (isError ? Icons.error_rounded : Icons.downloading_rounded),
-                          color: isDone ? Colors.green : (isError ? Colors.red : Theme.of(context).primaryColor),
+                              : (isError
+                                    ? Icons.error_rounded
+                                    : Icons.downloading_rounded),
+                          color: isDone
+                              ? Colors.green
+                              : (isError
+                                    ? Colors.red
+                                    : Theme.of(context).primaryColor),
                         ),
                         const SizedBox(width: 10),
                         Text(
                           isDone
                               ? 'Tải hoàn tất!'
-                              : (isError ? 'Lỗi khi tải' : 'Đang tải về offline...'),
-                          style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                              : (isError
+                                    ? 'Lỗi khi tải'
+                                    : 'Đang tải về offline...'),
+                          style: const TextStyle(
+                            fontSize: 16,
+                            fontWeight: FontWeight.bold,
+                          ),
                         ),
                         const Spacer(),
                         if (isDone || isError)
@@ -268,12 +302,18 @@ class _OnlineStoryDetailScreenState extends State<OnlineStoryDetailScreen> {
                       const SizedBox(height: 10),
                       Text(
                         '${service.downloadedCount} / ${service.totalChapters} chương (${(service.progress * 100).toStringAsFixed(1)}%)',
-                        style: const TextStyle(fontSize: 13, color: Colors.grey),
+                        style: const TextStyle(
+                          fontSize: 13,
+                          color: Colors.grey,
+                        ),
                       ),
                       const SizedBox(height: 4),
                       Text(
                         service.currentDownloadingTitle,
-                        style: const TextStyle(fontSize: 12, fontStyle: FontStyle.italic),
+                        style: const TextStyle(
+                          fontSize: 12,
+                          fontStyle: FontStyle.italic,
+                        ),
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                       ),
@@ -285,7 +325,10 @@ class _OnlineStoryDetailScreenState extends State<OnlineStoryDetailScreen> {
                             service.cancelDownload();
                             Navigator.pop(ctx);
                           },
-                          child: const Text('Dừng tải', style: TextStyle(color: Colors.red)),
+                          child: const Text(
+                            'Dừng tải',
+                            style: TextStyle(color: Colors.red),
+                          ),
                         ),
                       ),
                     ],
@@ -302,7 +345,8 @@ class _OnlineStoryDetailScreenState extends State<OnlineStoryDetailScreen> {
                         children: [
                           OutlinedButton.icon(
                             onPressed: () {
-                              final storyTitle = _detail?.title ?? widget.initialTitle;
+                              final storyTitle =
+                                  _detail?.title ?? widget.initialTitle;
                               final chaptersMap = _chapters
                                   .map((ch) => {'url': ch.url, 'name': ch.name})
                                   .toList();
@@ -364,7 +408,7 @@ class _OnlineStoryDetailScreenState extends State<OnlineStoryDetailScreen> {
     final author = _detail?.author ?? 'VBook Source';
 
     ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('Đang khởi tạo & đóng gói file EPUB...')),
+      const SnackBar(content: Text('Đang khởi tạo và đóng gói file EPUB...')),
     );
 
     final file = await OfflineDownloadService.instance.exportToEpub(
@@ -374,19 +418,26 @@ class _OnlineStoryDetailScreenState extends State<OnlineStoryDetailScreen> {
       author: author,
     );
 
+    final exportedFile = file;
+    final exportedFileExists =
+        exportedFile != null && await exportedFile.exists();
     if (!mounted) return;
 
-    if (file != null && await file.exists()) {
+    if (exportedFile != null && exportedFileExists) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text('Đã xuất file EPUB: ${file.path.split('/').last}'),
+          content: Text(
+            'Đã xuất file EPUB: ${exportedFile.path.split('/').last}',
+          ),
           backgroundColor: Colors.green.shade700,
           behavior: SnackBarBehavior.floating,
           action: SnackBarAction(
             label: 'Chia sẻ / Lưu',
             textColor: Colors.white,
             onPressed: () {
-              Share.shareXFiles([XFile(file.path)], text: 'Truyện "$title" (Định dạng EPUB)');
+              Share.shareXFiles([
+                XFile(exportedFile.path),
+              ], text: 'Truyện "$title" (Định dạng EPUB)');
             },
           ),
         ),
@@ -394,7 +445,9 @@ class _OnlineStoryDetailScreenState extends State<OnlineStoryDetailScreen> {
     } else {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-          content: Text('Chưa có chương offline nào được tải. Vui lòng bấm Tải Offline trước khi xuất EPUB.'),
+          content: Text(
+            'Chưa có chương offline nào được tải. Vui lòng bấm Tải Offline trước khi xuất EPUB.',
+          ),
           backgroundColor: Colors.orange,
           behavior: SnackBarBehavior.floating,
         ),
@@ -405,16 +458,24 @@ class _OnlineStoryDetailScreenState extends State<OnlineStoryDetailScreen> {
   @override
   Widget build(BuildContext context) {
     final colorScheme = Theme.of(context).colorScheme;
-    final title = (_detail?.title.trim().isNotEmpty == true) ? _detail!.title : widget.initialTitle;
-    final cover = (_detail?.thumbnailUrl.trim().isNotEmpty == true) ? _detail!.thumbnailUrl : widget.initialCover;
-    final author = (_detail?.author.trim().isNotEmpty == true) ? _detail!.author : 'Đang cập nhật';
-    final desc = (_detail?.description.trim().isNotEmpty == true) ? _detail!.description : 'Đang cập nhật...';
-    final status = _detail?.status ?? SManga.UNKNOWN;
-    final statusText = status == SManga.ONGOING
+    final title = (_detail?.title.trim().isNotEmpty == true)
+        ? _detail!.title
+        : widget.initialTitle;
+    final cover = (_detail?.thumbnailUrl.trim().isNotEmpty == true)
+        ? _detail!.thumbnailUrl
+        : widget.initialCover;
+    final author = (_detail?.author.trim().isNotEmpty == true)
+        ? _detail!.author
+        : 'Đang cập nhật';
+    final desc = (_detail?.description.trim().isNotEmpty == true)
+        ? _detail!.description
+        : 'Đang cập nhật...';
+    final status = _detail?.status ?? SManga.unknown;
+    final statusText = status == SManga.ongoing
         ? 'Đang tiến hành'
-        : status == SManga.COMPLETED
-            ? 'Hoàn thành'
-            : 'Không rõ';
+        : status == SManga.completed
+        ? 'Hoàn thành'
+        : 'Không rõ';
 
     return Scaffold(
       appBar: AppBar(
@@ -446,11 +507,18 @@ class _OnlineStoryDetailScreenState extends State<OnlineStoryDetailScreen> {
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    const Icon(Icons.cloud_off_rounded, size: 64, color: Colors.grey),
+                    const Icon(
+                      Icons.cloud_off_rounded,
+                      size: 64,
+                      color: Colors.grey,
+                    ),
                     const SizedBox(height: 16),
                     const Text(
                       'Không tải được chi tiết truyện',
-                      style: TextStyle(fontSize: 17, fontWeight: FontWeight.bold),
+                      style: TextStyle(
+                        fontSize: 17,
+                        fontWeight: FontWeight.bold,
+                      ),
                     ),
                     const SizedBox(height: 8),
                     Text(
@@ -462,7 +530,7 @@ class _OnlineStoryDetailScreenState extends State<OnlineStoryDetailScreen> {
                     ),
                     const SizedBox(height: 8),
                     const Text(
-                      'Nguồn truyện có thể bị chặn địa lý (cần bật VPN), yêu cầu Cloudflare hoặc đăng nhập web.',
+                      'Nguồn truyện có thể bị chặn địa lý, yêu cầu Cloudflare hoặc đăng nhập web.',
                       style: TextStyle(fontSize: 13, color: Colors.grey),
                       textAlign: TextAlign.center,
                     ),
@@ -470,7 +538,7 @@ class _OnlineStoryDetailScreenState extends State<OnlineStoryDetailScreen> {
                     FilledButton.icon(
                       onPressed: _openBrowser,
                       icon: const Icon(Icons.open_in_browser),
-                      label: const Text('Mở trình duyệt & Đăng nhập'),
+                      label: const Text('Mở trình duyệt và đăng nhập'),
                     ),
                     const SizedBox(height: 12),
                     OutlinedButton.icon(
@@ -501,18 +569,27 @@ class _OnlineStoryDetailScreenState extends State<OnlineStoryDetailScreen> {
                           child: Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
-                              Text(title, style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
+                              Text(
+                                title,
+                                style: const TextStyle(
+                                  fontSize: 20,
+                                  fontWeight: FontWeight.bold,
+                                ),
+                              ),
                               const SizedBox(height: 8),
-                              Text('Tác giả: $author', style: TextStyle(color: Colors.grey.shade600)),
+                              Text(
+                                'Tác giả: $author',
+                                style: TextStyle(color: Colors.grey.shade600),
+                              ),
                               const SizedBox(height: 4),
                               Row(
                                 children: [
                                   Icon(
-                                    status == SManga.COMPLETED
+                                    status == SManga.completed
                                         ? Icons.check_circle_outline
                                         : Icons.schedule,
                                     size: 14,
-                                    color: status == SManga.COMPLETED
+                                    color: status == SManga.completed
                                         ? Colors.green
                                         : Colors.orange,
                                   ),
@@ -544,7 +621,9 @@ class _OnlineStoryDetailScreenState extends State<OnlineStoryDetailScreen> {
                                 SizedBox(
                                   width: double.infinity,
                                   child: FilledButton.icon(
-                                    onPressed: _addedToLibrary ? null : _addToLibrary,
+                                    onPressed: _addedToLibrary
+                                        ? null
+                                        : _addToLibrary,
                                     icon: _isAddingToLibrary
                                         ? const SizedBox(
                                             width: 16,
@@ -580,20 +659,31 @@ class _OnlineStoryDetailScreenState extends State<OnlineStoryDetailScreen> {
                                         Navigator.push(
                                           context,
                                           MaterialPageRoute(
-                                            builder: (_) => OnlineChapterReaderScreen(
-                                              plugin: widget.plugin,
-                                              chapterUrl: _chapters.first.url,
-                                              chapterTitle: _chapters.first.name.isNotEmpty
-                                                  ? _chapters.first.name
-                                                  : 'Chương 1',
-                                              storyTitle: _detail?.title ?? widget.initialTitle,
-                                              allChapters: _buildChapterNavList(),
-                                              currentIndex: 0,
-                                            ),
+                                            builder: (_) =>
+                                                OnlineChapterReaderScreen(
+                                                  plugin: widget.plugin,
+                                                  chapterUrl:
+                                                      _chapters.first.url,
+                                                  chapterTitle:
+                                                      _chapters
+                                                          .first
+                                                          .name
+                                                          .isNotEmpty
+                                                      ? _chapters.first.name
+                                                      : 'Chương 1',
+                                                  storyTitle:
+                                                      _detail?.title ??
+                                                      widget.initialTitle,
+                                                  allChapters:
+                                                      _buildChapterNavList(),
+                                                  currentIndex: 0,
+                                                ),
                                           ),
                                         );
                                       },
-                                      icon: const Icon(Icons.play_arrow_rounded),
+                                      icon: const Icon(
+                                        Icons.play_arrow_rounded,
+                                      ),
                                       label: const Text('Đọc từ đầu'),
                                     ),
                                   ),
@@ -603,16 +693,28 @@ class _OnlineStoryDetailScreenState extends State<OnlineStoryDetailScreen> {
                                       Expanded(
                                         child: OutlinedButton.icon(
                                           onPressed: _startDownloadFlow,
-                                          icon: const Icon(Icons.download_rounded, size: 18),
-                                          label: const Text('Tải Offline', style: TextStyle(fontSize: 13)),
+                                          icon: const Icon(
+                                            Icons.download_rounded,
+                                            size: 18,
+                                          ),
+                                          label: const Text(
+                                            'Tải Offline',
+                                            style: TextStyle(fontSize: 13),
+                                          ),
                                         ),
                                       ),
                                       const SizedBox(width: 8),
                                       Expanded(
                                         child: OutlinedButton.icon(
                                           onPressed: _exportEpubFlow,
-                                          icon: const Icon(Icons.import_export_rounded, size: 18),
-                                          label: const Text('Xuất EPUB', style: TextStyle(fontSize: 13)),
+                                          icon: const Icon(
+                                            Icons.import_export_rounded,
+                                            size: 18,
+                                          ),
+                                          label: const Text(
+                                            'Xuất EPUB',
+                                            style: TextStyle(fontSize: 13),
+                                          ),
                                         ),
                                       ),
                                     ],
@@ -632,13 +734,29 @@ class _OnlineStoryDetailScreenState extends State<OnlineStoryDetailScreen> {
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        const Text('Giới thiệu', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+                        const Text(
+                          'Giới thiệu',
+                          style: TextStyle(
+                            fontSize: 18,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
                         const SizedBox(height: 8),
-                        Text(desc, maxLines: 6, overflow: TextOverflow.ellipsis),
+                        Text(
+                          desc,
+                          maxLines: 6,
+                          overflow: TextOverflow.ellipsis,
+                        ),
                         const SizedBox(height: 24),
                         Row(
                           children: [
-                            const Text('Danh sách chương', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+                            const Text(
+                              'Danh sách chương',
+                              style: TextStyle(
+                                fontSize: 18,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
                             const Spacer(),
                             if (!_isLoadingChapters && _chapters.isNotEmpty)
                               Text(
@@ -657,41 +775,47 @@ class _OnlineStoryDetailScreenState extends State<OnlineStoryDetailScreen> {
                 ),
                 if (_isLoadingChapters)
                   const SliverToBoxAdapter(
-                    child: Center(child: Padding(padding: EdgeInsets.all(16), child: CircularProgressIndicator())),
+                    child: Center(
+                      child: Padding(
+                        padding: EdgeInsets.all(16),
+                        child: CircularProgressIndicator(),
+                      ),
+                    ),
                   )
                 else
                   SliverList(
-                    delegate: SliverChildBuilderDelegate(
-                      (context, index) {
-                        final chapter = _chapters[index];
-                        return ListTile(
-                          title: Text(chapter.name.isNotEmpty ? chapter.name : 'Chương ${index + 1}'),
-                          trailing: const Icon(Icons.chevron_right),
-                          onTap: () {
-                            Navigator.push(
-                              context,
-                              MaterialPageRoute(
-                                builder: (_) => OnlineChapterReaderScreen(
-                                  plugin: widget.plugin,
-                                  chapterUrl: chapter.url,
-                                  chapterTitle: chapter.name.isNotEmpty
-                                      ? chapter.name
-                                      : 'Chương ${index + 1}',
-                                  storyTitle: _detail?.title ?? widget.initialTitle,
-                                  allChapters: _buildChapterNavList(),
-                                  currentIndex: index,
-                                ),
+                    delegate: SliverChildBuilderDelegate((context, index) {
+                      final chapter = _chapters[index];
+                      return ListTile(
+                        title: Text(
+                          chapter.name.isNotEmpty
+                              ? chapter.name
+                              : 'Chương ${index + 1}',
+                        ),
+                        trailing: const Icon(Icons.chevron_right),
+                        onTap: () {
+                          Navigator.push(
+                            context,
+                            MaterialPageRoute(
+                              builder: (_) => OnlineChapterReaderScreen(
+                                plugin: widget.plugin,
+                                chapterUrl: chapter.url,
+                                chapterTitle: chapter.name.isNotEmpty
+                                    ? chapter.name
+                                    : 'Chương ${index + 1}',
+                                storyTitle:
+                                    _detail?.title ?? widget.initialTitle,
+                                allChapters: _buildChapterNavList(),
+                                currentIndex: index,
                               ),
-                            );
-                          },
-                        );
-                      },
-                      childCount: _chapters.length,
-                    ),
+                            ),
+                          );
+                        },
+                      );
+                    }, childCount: _chapters.length),
                   ),
               ],
             ),
     );
   }
 }
-

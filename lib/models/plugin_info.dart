@@ -37,10 +37,22 @@ class PluginInfo {
   bool get isComic => type == 'comic';
   bool get hasUpdate => isInstalled && installedVersion < version;
 
-  factory PluginInfo.fromRegistryJson(Map<String, dynamic> json, {String? registryUrl}) {
+  factory PluginInfo.fromRegistryJson(
+    Map<String, dynamic> json, {
+    String? registryUrl,
+  }) {
+    final rawMetadata = json['metadata'];
+    final metadata = rawMetadata is Map
+        ? Map<String, dynamic>.from(rawMetadata)
+        : const <String, dynamic>{};
+
+    dynamic readValue(String key) => json[key] ?? metadata[key];
+    String readString(String key) => readValue(key)?.toString() ?? '';
+
     // Trích xuất ID: ưu tiên id trong json, nếu không trích xuất từ path hoặc name
-    String id = json['id']?.toString() ?? json['metadata']?['id']?.toString() ?? '';
-    final path = json['path'] as String? ?? json['downloadUrl'] as String? ?? '';
+    String id = readString('id');
+    final path =
+        json['path']?.toString() ?? json['downloadUrl']?.toString() ?? '';
 
     if (id.isEmpty && path.isNotEmpty) {
       final pathParts = path.split('/');
@@ -57,7 +69,7 @@ class PluginInfo {
     }
 
     if (id.isEmpty) {
-      final name = json['name']?.toString() ?? '';
+      final name = readString('name');
       id = name.replaceAll(RegExp(r'[^a-zA-Z0-9_]'), '_');
     }
 
@@ -66,12 +78,18 @@ class PluginInfo {
     }
 
     String resolvedDownloadUrl = path;
-    String resolvedIconUrl = json['icon'] as String? ?? json['iconUrl'] as String? ?? '';
+    String resolvedIconUrl =
+        json['icon']?.toString() ??
+        json['iconUrl']?.toString() ??
+        metadata['icon']?.toString() ??
+        metadata['iconUrl']?.toString() ??
+        '';
 
     if (registryUrl != null && registryUrl.isNotEmpty) {
       try {
         final baseUri = Uri.parse(registryUrl);
-        if (resolvedDownloadUrl.isNotEmpty && !resolvedDownloadUrl.startsWith('http')) {
+        if (resolvedDownloadUrl.isNotEmpty &&
+            !resolvedDownloadUrl.startsWith('http')) {
           resolvedDownloadUrl = baseUri.resolve(resolvedDownloadUrl).toString();
         }
         if (resolvedIconUrl.isNotEmpty && !resolvedIconUrl.startsWith('http')) {
@@ -80,18 +98,35 @@ class PluginInfo {
       } catch (_) {}
     }
 
+    final rawScripts = json['scripts'] ?? json['script'];
+    final scripts = <String, String>{};
+    if (rawScripts is Map) {
+      for (final entry in rawScripts.entries) {
+        if (entry.value != null) {
+          scripts[entry.key.toString()] = entry.value.toString();
+        }
+      }
+    }
+
+    final rawVersion = readValue('version');
+    final version = rawVersion is num
+        ? rawVersion.toInt()
+        : int.tryParse(rawVersion?.toString() ?? '') ?? 1;
+    final tag = readString('tag').toLowerCase();
+
     return PluginInfo(
       id: id,
-      name: json['name'] ?? id,
-      author: json['author'] ?? 'vBook',
-      source: json['source'] ?? '',
+      name: readString('name').isEmpty ? id : readString('name'),
+      author: readString('author').isEmpty ? 'vBook' : readString('author'),
+      source: readString('source'),
       iconUrl: resolvedIconUrl,
-      description: json['description'] ?? '',
-      type: json['type'] ?? 'novel',
-      locale: json['locale'] ?? '',
-      version: json['version'] ?? 1,
-      isNsfw: json['tag'] == 'nsfw' || json['isNsfw'] == true,
+      description: readString('description'),
+      type: readString('type').isEmpty ? 'novel' : readString('type'),
+      locale: readString('locale'),
+      version: version,
+      isNsfw: tag == 'nsfw' || readValue('isNsfw') == true,
       downloadUrl: resolvedDownloadUrl,
+      scripts: scripts,
     );
   }
 

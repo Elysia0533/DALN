@@ -38,10 +38,14 @@ dependencies:
   xml: ^6.6.1
   webview_flutter: ^4.14.1
   crypto: ^3.0.7
+  sqflite: 2.4.2+1
 
 dev_dependencies:
   flutter_test:
     sdk: flutter
+  integration_test:
+    sdk: flutter
+  sqflite_common_ffi: 2.4.0+3
   flutter_lints: ^6.0.0
 
 flutter:

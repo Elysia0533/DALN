@@ -36,7 +36,9 @@ describe('community attachment audit script', () => {
   });
 
   after(async () => {
-    await testEnv.cleanup();
+    if (testEnv) {
+      await testEnv.cleanup();
+    }
   });
 
   beforeEach(async () => {

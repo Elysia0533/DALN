@@ -1,19 +1,30 @@
 package com.vbook.reader.engine
 
 import app.cash.quickjs.QuickJs
+import app.cash.quickjs.QuickJsException
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
-import logcat.LogPriority
-import logcat.logcat
 import okhttp3.OkHttpClient
 import org.jsoup.Jsoup
 import java.io.File
+import java.util.concurrent.ExecutionException
+import java.util.concurrent.Executors
+import java.util.concurrent.Future
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.TimeoutException
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicLong
 
 class VBookEngine(
     private val client: OkHttpClient,
@@ -25,35 +36,41 @@ class VBookEngine(
     private val elementsMap = mutableMapOf<Int, org.jsoup.select.Elements>()
     private var nextId = 0
     private val mutex = Mutex()
+    private val closed = AtomicBoolean(false)
+    private val unavailable = AtomicBoolean(false)
+    private val sessionGeneration = AtomicLong(0L)
+    private val executionExecutor = Executors.newSingleThreadExecutor { runnable ->
+        Thread(runnable, "vbook-js-worker").apply { isDaemon = true }
+    }
+
+    private fun storeElements(elements: org.jsoup.select.Elements): Int {
+        if (elementsMap.size >= MAX_JSOUP_HANDLES) {
+            throw JsResourceLimitException("HTML handle")
+        }
+        val id = nextId++
+        elementsMap[id] = elements
+        return id
+    }
 
     private fun setupBindings(quickJs: QuickJs) {
         quickJs.set("AndroidApp", AndroidAppBridge::class.java, object : AndroidAppBridge {
             override fun fetch(url: String, optionsJson: String): String {
-                return try {
-                    val options = parseRequestOptions(optionsJson)
-                    val response = jsEnv.fetch(url, options)
-                    buildString {
-                        append("{")
-                        append("\"ok\":${response.ok},")
-                        append("\"status\":${response.status},")
-                        append("\"headers\":${Json.encodeToString(response.headers)},")
-                        append("\"text\":${org.json.JSONObject.quote(response.text())}")
-                        append("}")
-                    }
-                } catch (e: Exception) {
-                    logcat(LogPriority.ERROR) { "AndroidApp.fetch error: ${e.message}" }
-                    """{"ok":false,"status":500,"headers":{},"text":""}"""
+                val options = parseRequestOptions(optionsJson)
+                val response = jsEnv.fetch(url, options)
+                return buildString {
+                    append("{")
+                    append("\"ok\":${response.ok},")
+                    append("\"status\":${response.status},")
+                    append("\"headers\":${Json.encodeToString(response.headers)},")
+                    append("\"text\":${org.json.JSONObject.quote(response.text())}")
+                    append("}")
                 }
             }
 
             override fun fetchBase64(url: String, optionsJson: String): String {
-                return try {
-                    val options = parseRequestOptions(optionsJson)
-                    val bytes = jsEnv.fetchBytes(url, options)
-                    android.util.Base64.encodeToString(bytes, android.util.Base64.NO_WRAP)
-                } catch (e: Exception) {
-                    ""
-                }
+                val options = parseRequestOptions(optionsJson)
+                val bytes = jsEnv.fetchBytes(url, options)
+                return android.util.Base64.encodeToString(bytes, android.util.Base64.NO_WRAP)
             }
 
             override fun load(path: String): String {
@@ -70,17 +87,16 @@ class VBookEngine(
             }
 
             override fun jsoupParse(html: String, baseUri: String): Int {
+                if (html.length > MAX_HTML_CHARACTERS) {
+                    throw JsResourceLimitException("HTML input")
+                }
                 val doc = Jsoup.parse(html, baseUri)
-                val id = nextId++
-                elementsMap[id] = org.jsoup.select.Elements(doc)
-                return id
+                return storeElements(org.jsoup.select.Elements(doc))
             }
 
             override fun jsoupSelect(id: Int, selector: String): Int {
                 val parent = elementsMap[id] ?: return -1
-                val childId = nextId++
-                elementsMap[childId] = parent.select(selector)
-                return childId
+                return storeElements(parent.select(selector))
             }
 
             override fun jsoupText(id: Int): String {
@@ -116,25 +132,19 @@ class VBookEngine(
             }
 
             private fun createEmptyElements(): Int {
-                val childId = nextId++
-                elementsMap[childId] = org.jsoup.select.Elements()
-                return childId
+                return storeElements(org.jsoup.select.Elements())
             }
 
             override fun jsoupFirst(id: Int): Int {
                 val parent = elementsMap[id] ?: return createEmptyElements()
                 val first = parent.first() ?: return createEmptyElements()
-                val childId = nextId++
-                elementsMap[childId] = org.jsoup.select.Elements(first)
-                return childId
+                return storeElements(org.jsoup.select.Elements(first))
             }
 
             override fun jsoupLast(id: Int): Int {
                 val parent = elementsMap[id] ?: return createEmptyElements()
                 val last = parent.last() ?: return createEmptyElements()
-                val childId = nextId++
-                elementsMap[childId] = org.jsoup.select.Elements(last)
-                return childId
+                return storeElements(org.jsoup.select.Elements(last))
             }
 
             override fun jsoupSize(id: Int): Int {
@@ -144,25 +154,19 @@ class VBookEngine(
             override fun jsoupGet(id: Int, index: Int): Int {
                 val parent = elementsMap[id] ?: return createEmptyElements()
                 val element = parent.getOrNull(index) ?: return createEmptyElements()
-                val childId = nextId++
-                elementsMap[childId] = org.jsoup.select.Elements(element)
-                return childId
+                return storeElements(org.jsoup.select.Elements(element))
             }
 
             override fun jsoupParent(id: Int): Int {
                 val parent = elementsMap[id] ?: return createEmptyElements()
                 val p = parent.first()?.parent() ?: return createEmptyElements()
-                val childId = nextId++
-                elementsMap[childId] = org.jsoup.select.Elements(p)
-                return childId
+                return storeElements(org.jsoup.select.Elements(p))
             }
 
             override fun jsoupChildren(id: Int): Int {
                 val parent = elementsMap[id] ?: return createEmptyElements()
                 val c = parent.first()?.children() ?: return createEmptyElements()
-                val childId = nextId++
-                elementsMap[childId] = c
-                return childId
+                return storeElements(c)
             }
 
             override fun jsoupHasClass(id: Int, className: String): Boolean {
@@ -170,6 +174,9 @@ class VBookEngine(
             }
 
             override fun sleep(ms: Int) {
+                if (ms > MAX_HOST_SLEEP_MS) {
+                    throw JsResourceLimitException("host sleep")
+                }
                 Thread.sleep(ms.toLong().coerceAtLeast(0L))
             }
         })
@@ -438,8 +445,8 @@ class VBookEngine(
                     ?: emptyMap(),
                 body = obj["body"],
             )
-        } catch (_: Exception) {
-            JsRequestOptions()
+        } catch (e: Exception) {
+            throw JsScriptException("request options", e)
         }
     }
 
@@ -473,56 +480,204 @@ class VBookEngine(
         return result
     }
 
-    suspend fun execute(script: String, functionName: String, vararg args: Any?): String? =
-        withContext(kotlinx.coroutines.Dispatchers.IO) {
-            mutex.withLock {
-                try {
-                    val finalScript = preprocessScript(script, rootDir)
+    suspend fun execute(script: String, functionName: String, vararg args: Any?): String? = mutex.withLock {
+        currentCoroutineContext().ensureActive()
+        ensureAvailable()
 
-                    val jsArgs = args.joinToString(", ") { arg ->
-                        when (arg) {
-                            is String -> Json.encodeToString(arg)
-                            is Number -> arg.toString()
-                            is Boolean -> arg.toString()
-                            else -> "null"
-                        }
-                    }
+        if (!JS_IDENTIFIER.matches(functionName)) {
+            throw JsScriptException("invalid function name")
+        }
 
-                    val callScript = """
-                        (function() {
-                            $finalScript
-                            if (typeof $functionName === 'function') {
-                                var res = $functionName($jsArgs);
-                                if (typeof res === 'object' && res !== null) {
-                                    return JSON.stringify(res);
-                                }
-                                return res;
-                            } else {
-                                return null;
-                            }
-                        })();
-                    """.trimIndent()
+        val finalScript = preprocessScript(script, rootDir)
+        if (finalScript.toByteArray(Charsets.UTF_8).size > MAX_SCRIPT_BYTES) {
+            throw JsResourceLimitException("JavaScript source")
+        }
 
-                    var quickJs: QuickJs? = null
-                    try {
-                        quickJs = QuickJs.create()
-                        setupBindings(quickJs)
-                        val res = quickJs.evaluate(callScript)?.toString()
-                        res
-                    } finally {
-                        quickJs?.close()
-                        elementsMap.clear() // Prevent memory leak of JSoup Elements
-                    }
-                } catch (e: Exception) {
-                    logcat(LogPriority.ERROR) { "JS Error in $functionName: ${e.message}" }
-                    elementsMap.clear() // Prevent memory leak even on error
-                    null
-                }
+        val jsArgs = args.joinToString(", ") { arg ->
+            when (arg) {
+                is String -> Json.encodeToString(arg)
+                is Number -> arg.toString()
+                is Boolean -> arg.toString()
+                else -> "null"
             }
         }
 
+        val callScript = """
+            (function() {
+                $finalScript
+                if (typeof $functionName !== 'function') {
+                    throw new Error('Required extension function is missing');
+                }
+                var result = $functionName($jsArgs);
+                if (result !== null &&
+                    (typeof result === 'object' || typeof result === 'function') &&
+                    typeof result.then === 'function') {
+                    return JSON.stringify({ type: 'promise' });
+                }
+                var serialized = null;
+                if (typeof result === 'string') {
+                    serialized = result;
+                } else if (typeof result !== 'undefined' && result !== null) {
+                    serialized = JSON.stringify(result);
+                }
+                return JSON.stringify({ type: 'value', value: serialized });
+            })();
+        """.trimIndent()
+
+        val sessionToken = sessionGeneration.incrementAndGet()
+        val future = try {
+            executionExecutor.submit<String?> {
+                evaluateBlocking(callScript, functionName, sessionToken)
+            }
+        } catch (e: Exception) {
+            throw JsEngineUnavailableException()
+        }
+
+        awaitExecution(future, functionName, sessionToken)
+    }
+
+    private fun ensureAvailable() {
+        if (closed.get()) throw JsExecutionCancelledException()
+        if (unavailable.get()) throw JsEngineUnavailableException()
+    }
+
+    private fun isSessionActive(sessionToken: Long): Boolean =
+        !closed.get() && !unavailable.get() && sessionGeneration.get() == sessionToken
+
+    private fun evaluateBlocking(
+        callScript: String,
+        functionName: String,
+        sessionToken: Long,
+    ): String? {
+        if (!isSessionActive(sessionToken)) throw JsExecutionCancelledException()
+
+        var quickJs: QuickJs? = null
+        return try {
+            quickJs = QuickJs.create()
+            setupBindings(quickJs)
+            val envelope = quickJs.evaluate(callScript, "$functionName.js")?.toString()
+                ?: throw JsResultParseException(functionName)
+            if (!isSessionActive(sessionToken)) throw JsExecutionCancelledException()
+            decodeExecutionEnvelope(envelope, functionName)
+        } finally {
+            quickJs?.close()
+            elementsMap.clear()
+            nextId = 0
+        }
+    }
+
+    private fun decodeExecutionEnvelope(envelope: String, functionName: String): String? {
+        if (envelope.length > MAX_RESULT_CHARACTERS) {
+            throw JsResourceLimitException("JavaScript result")
+        }
+
+        val payload = try {
+            Json.parseToJsonElement(envelope) as? JsonObject
+                ?: throw JsResultParseException(functionName)
+        } catch (e: VBookEngineException) {
+            throw e
+        } catch (e: Exception) {
+            throw JsResultParseException(functionName, e)
+        }
+
+        return when (payload["type"]?.jsonPrimitiveOrNull()?.content) {
+            "promise" -> throw JsAsyncUnsupportedException()
+            "value" -> {
+                val value = payload["value"]
+                if (value == null || value is JsonNull) {
+                    null
+                } else {
+                    val serialized = value.jsonPrimitiveOrNull()?.content
+                        ?: throw JsResultParseException(functionName)
+                    if (serialized.toByteArray(Charsets.UTF_8).size > MAX_RESULT_BYTES) {
+                        throw JsResourceLimitException("JavaScript result")
+                    }
+                    serialized
+                }
+            }
+            else -> throw JsResultParseException(functionName)
+        }
+    }
+
+    private suspend fun awaitExecution(
+        future: Future<String?>,
+        functionName: String,
+        sessionToken: Long,
+    ): String? = withContext(Dispatchers.IO) {
+        val deadlineNanos = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(EXECUTION_TIMEOUT_MS)
+        try {
+            while (true) {
+                currentCoroutineContext().ensureActive()
+                if (!isSessionActive(sessionToken)) {
+                    future.cancel(true)
+                    throw JsExecutionCancelledException()
+                }
+
+                val remainingNanos = deadlineNanos - System.nanoTime()
+                if (remainingNanos <= 0L) {
+                    disableAfterTimeout(future, functionName)
+                }
+
+                try {
+                    return@withContext future.get(
+                        minOf(remainingNanos, TimeUnit.MILLISECONDS.toNanos(EXECUTION_POLL_MS)),
+                        TimeUnit.NANOSECONDS,
+                    )
+                } catch (_: TimeoutException) {
+                    // Poll session state and coroutine cancellation until the deadline.
+                }
+            }
+            @Suppress("UNREACHABLE_CODE")
+            null
+        } catch (e: CancellationException) {
+            unavailable.set(true)
+            sessionGeneration.incrementAndGet()
+            future.cancel(true)
+            executionExecutor.shutdownNow()
+            throw e
+        } catch (e: InterruptedException) {
+            future.cancel(true)
+            Thread.currentThread().interrupt()
+            throw JsExecutionCancelledException()
+        } catch (e: ExecutionException) {
+            throw translateExecutionFailure(e.cause ?: e, functionName)
+        }
+    }
+
+    private fun disableAfterTimeout(future: Future<*>, functionName: String): Nothing {
+        unavailable.set(true)
+        sessionGeneration.incrementAndGet()
+        future.cancel(true)
+        executionExecutor.shutdownNow()
+        throw JsExecutionTimeoutException(functionName)
+    }
+
+    private fun translateExecutionFailure(error: Throwable, functionName: String): VBookEngineException =
+        when (error) {
+            is VBookEngineException -> error
+            is QuickJsException -> JsScriptException(functionName, error)
+            is OutOfMemoryError -> JsResourceLimitException("JavaScript memory")
+            else -> JsScriptException(functionName, error)
+        }
+
     override fun close() {
-        // No-op. QuickJs is now managed inside execute()
+        if (!closed.compareAndSet(false, true)) return
+        sessionGeneration.incrementAndGet()
+        executionExecutor.shutdownNow()
+        elementsMap.clear()
+        nextId = 0
+    }
+
+    companion object {
+        private const val EXECUTION_TIMEOUT_MS = 30_000L
+        private const val EXECUTION_POLL_MS = 100L
+        private const val MAX_SCRIPT_BYTES = 2 * 1024 * 1024
+        private const val MAX_RESULT_BYTES = 16 * 1024 * 1024
+        private const val MAX_RESULT_CHARACTERS = 16 * 1024 * 1024
+        private const val MAX_HTML_CHARACTERS = 8 * 1024 * 1024
+        private const val MAX_JSOUP_HANDLES = 10_000
+        private const val MAX_HOST_SLEEP_MS = 5_000
+        private val JS_IDENTIFIER = Regex("^[A-Za-z_$][A-Za-z0-9_$]*$")
     }
 
     interface AndroidAppBridge {

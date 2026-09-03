@@ -85,38 +85,49 @@ class _SourceBrowseScreenState extends State<SourceBrowseScreen> {
 
     if (!pluginJsonFound && await baseDir.exists()) {
       try {
-        final subDirs = await baseDir.list().where((e) => e is Directory).toList();
+        final subDirs = await baseDir
+            .list()
+            .where((e) => e is Directory)
+            .toList();
         for (final subDir in subDirs) {
           if (await File('${subDir.path}/plugin.json').exists()) {
             effectiveDirPath = subDir.path;
             pluginJsonFound = true;
-            print('[SourceBrowse] Found plugin.json in subdirectory: $effectiveDirPath');
+            debugPrint(
+              '[SourceBrowse] Found plugin.json in subdirectory: $effectiveDirPath',
+            );
             break;
           }
         }
       } catch (e) {
-        print('[SourceBrowse] Error scanning subdirs: $e');
+        debugPrint('[SourceBrowse] Error scanning subdirs: $e');
       }
     }
 
     if (!await baseDir.exists() || !pluginJsonFound) {
-      print('[SourceBrowse] Plugin dir missing for ${plugin.id}, downloading...');
+      debugPrint(
+        '[SourceBrowse] Plugin dir missing for ${plugin.id}, downloading...',
+      );
       final downloadUrl = plugin.downloadUrl;
       if (downloadUrl.isEmpty) {
-        throw Exception('Không có URL tải plugin. Vui lòng gỡ và cài lại từ kho Extension.');
+        throw Exception(
+          'Không có URL tải plugin. Vui lòng gỡ và cài lại từ kho Extension.',
+        );
       }
-      final result = await PluginLoader.installPlugin(downloadUrl, plugin.id);
-      if (result == null) {
-        throw Exception('Không thể tải plugin. Kiểm tra kết nối mạng.');
-      }
-      effectiveDirPath = result;
+      await ExtensionService.installPlugin(plugin);
+      return true;
     }
 
-    print('[SourceBrowse] Loading engine with path: $effectiveDirPath');
+    debugPrint('[SourceBrowse] Loading engine with path: $effectiveDirPath');
 
-    final success = await VBookEngineChannel.loadSource(plugin.id, effectiveDirPath);
+    final success = await VBookEngineChannel.loadSource(
+      plugin.id,
+      effectiveDirPath,
+    );
     if (!success) {
-      throw Exception('Engine load failed for ${plugin.id}. Check logcat for details.');
+      throw Exception(
+        'Engine load failed for ${plugin.id}. Check logcat for details.',
+      );
     }
     return true;
   }
@@ -188,8 +199,12 @@ class _SourceBrowseScreenState extends State<SourceBrowseScreen> {
       MangasPage? page;
       if (_currentSearchQuery.isNotEmpty) {
         page = await VBookEngineChannel.getSearchManga(
-            _currentPlugin.id, _currentSearchQuery, nextPage);
-      } else if (_dynamicTabs.isNotEmpty && _selectedTab < _dynamicTabs.length) {
+          _currentPlugin.id,
+          _currentSearchQuery,
+          nextPage,
+        );
+      } else if (_dynamicTabs.isNotEmpty &&
+          _selectedTab < _dynamicTabs.length) {
         final tab = _dynamicTabs[_selectedTab];
         page = await VBookEngineChannel.getMangaListByTab(
           _currentPlugin.id,
@@ -199,14 +214,20 @@ class _SourceBrowseScreenState extends State<SourceBrowseScreen> {
         );
       } else if (_selectedTab == 0) {
         page = await VBookEngineChannel.getLatestUpdates(
-            _currentPlugin.id, nextPage);
+          _currentPlugin.id,
+          nextPage,
+        );
         if (page == null || page.mangas.isEmpty) {
           page = await VBookEngineChannel.getPopularManga(
-              _currentPlugin.id, nextPage);
+            _currentPlugin.id,
+            nextPage,
+          );
         }
       } else {
         page = await VBookEngineChannel.getPopularManga(
-            _currentPlugin.id, nextPage);
+          _currentPlugin.id,
+          nextPage,
+        );
       }
 
       if (mounted) {
@@ -239,7 +260,10 @@ class _SourceBrowseScreenState extends State<SourceBrowseScreen> {
     try {
       await _ensurePluginLoaded(_currentPlugin);
       final page = await VBookEngineChannel.getSearchManga(
-          _currentPlugin.id, query.trim(), 1);
+        _currentPlugin.id,
+        query.trim(),
+        1,
+      );
       if (mounted) {
         setState(() {
           _stories = page?.mangas ?? [];
@@ -272,10 +296,8 @@ class _SourceBrowseScreenState extends State<SourceBrowseScreen> {
     await Navigator.push(
       context,
       MaterialPageRoute(
-        builder: (_) => WebBrowserScreen(
-          initialUrl: baseUrl,
-          title: _currentPlugin.name,
-        ),
+        builder: (_) =>
+            WebBrowserScreen(initialUrl: baseUrl, title: _currentPlugin.name),
       ),
     );
     if (mounted) {
@@ -307,20 +329,28 @@ class _SourceBrowseScreenState extends State<SourceBrowseScreen> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 16,
+                    vertical: 8,
+                  ),
                   child: Row(
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
                       const Text(
                         'Tất cả phần mở rộng',
-                        style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                        style: TextStyle(
+                          fontSize: 16,
+                          fontWeight: FontWeight.bold,
+                        ),
                       ),
                       TextButton.icon(
                         onPressed: () {
                           Navigator.pop(context);
                           Navigator.push(
                             context,
-                            MaterialPageRoute(builder: (_) => const ExtensionScreen()),
+                            MaterialPageRoute(
+                              builder: (_) => const ExtensionScreen(),
+                            ),
                           ).then((_) => _loadInstalledPlugins());
                         },
                         icon: const Icon(Icons.settings, size: 18),
@@ -333,7 +363,9 @@ class _SourceBrowseScreenState extends State<SourceBrowseScreen> {
                 if (_installedPlugins.isEmpty)
                   const Padding(
                     padding: EdgeInsets.all(24),
-                    child: Center(child: Text('Chưa có extension nào được cài đặt')),
+                    child: Center(
+                      child: Text('Chưa có extension nào được cài đặt'),
+                    ),
                   )
                 else
                   Flexible(
@@ -345,20 +377,28 @@ class _SourceBrowseScreenState extends State<SourceBrowseScreen> {
                         final isSelected = plugin.id == _currentPlugin.id;
                         return ListTile(
                           leading: CircleAvatar(
-                            backgroundColor: Theme.of(context).primaryColor.withOpacity(0.15),
-                            child: Icon(Icons.extension_rounded,
-                                color: Theme.of(context).primaryColor),
+                            backgroundColor: Theme.of(
+                              context,
+                            ).primaryColor.withValues(alpha: 0.15),
+                            child: Icon(
+                              Icons.extension_rounded,
+                              color: Theme.of(context).primaryColor,
+                            ),
                           ),
                           title: Text(
                             plugin.name,
                             style: TextStyle(
-                              fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+                              fontWeight: isSelected
+                                  ? FontWeight.bold
+                                  : FontWeight.normal,
                             ),
                           ),
                           subtitle: Text('${plugin.type} • v${plugin.version}'),
                           trailing: isSelected
-                              ? Icon(Icons.check_circle,
-                                  color: Theme.of(context).primaryColor)
+                              ? Icon(
+                                  Icons.check_circle,
+                                  color: Theme.of(context).primaryColor,
+                                )
                               : null,
                           onTap: () {
                             Navigator.pop(context);
@@ -463,8 +503,10 @@ class _SourceBrowseScreenState extends State<SourceBrowseScreen> {
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
         decoration: BoxDecoration(
           color: isSelected
-              ? primaryColor.withOpacity(0.18)
-              : Theme.of(context).colorScheme.surfaceVariant.withOpacity(0.5),
+              ? primaryColor.withValues(alpha: 0.18)
+              : Theme.of(
+                  context,
+                ).colorScheme.surfaceContainerHighest.withValues(alpha: 0.5),
           borderRadius: BorderRadius.circular(12),
           border: Border.all(
             color: isSelected ? primaryColor : Colors.transparent,
@@ -492,8 +534,6 @@ class _SourceBrowseScreenState extends State<SourceBrowseScreen> {
   @override
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
-    final primaryColor = Theme.of(context).primaryColor;
-
     return Scaffold(
       appBar: AppBar(
         title: _isSearching
@@ -510,14 +550,20 @@ class _SourceBrowseScreenState extends State<SourceBrowseScreen> {
                 onTap: _showPluginSelectorBottomSheet,
                 borderRadius: BorderRadius.circular(8),
                 child: Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 6,
+                    vertical: 4,
+                  ),
                   child: Row(
                     mainAxisSize: MainAxisSize.min,
                     children: [
                       Flexible(
                         child: Text(
                           _currentPlugin.name,
-                          style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 18),
+                          style: const TextStyle(
+                            fontWeight: FontWeight.bold,
+                            fontSize: 18,
+                          ),
                           overflow: TextOverflow.ellipsis,
                         ),
                       ),
@@ -556,13 +602,18 @@ class _SourceBrowseScreenState extends State<SourceBrowseScreen> {
               decoration: BoxDecoration(
                 border: Border(
                   bottom: BorderSide(
-                    color: Theme.of(context).dividerColor.withOpacity(0.12),
+                    color: Theme.of(
+                      context,
+                    ).dividerColor.withValues(alpha: 0.12),
                   ),
                 ),
               ),
               child: SingleChildScrollView(
                 scrollDirection: Axis.horizontal,
-                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 16,
+                  vertical: 4,
+                ),
                 child: Row(
                   children: _dynamicTabs.isNotEmpty
                       ? List.generate(_dynamicTabs.length, (index) {
@@ -598,15 +649,15 @@ class _SourceBrowseScreenState extends State<SourceBrowseScreen> {
             child: _isLoading
                 ? const Center(child: CircularProgressIndicator())
                 : _error != null
-                    ? _buildErrorWidget()
-                    : _stories.isEmpty
-                        ? _buildEmptyWidget()
-                        : RefreshIndicator(
-                            onRefresh: _loadHome,
-                            child: _layoutMode == 2
-                                ? _buildListView(isDark)
-                                : _buildGridView(isDark),
-                          ),
+                ? _buildErrorWidget()
+                : _stories.isEmpty
+                ? _buildEmptyWidget()
+                : RefreshIndicator(
+                    onRefresh: _loadHome,
+                    child: _layoutMode == 2
+                        ? _buildListView(isDark)
+                        : _buildGridView(isDark),
+                  ),
           ),
         ],
       ),
@@ -625,7 +676,9 @@ class _SourceBrowseScreenState extends State<SourceBrowseScreen> {
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
         decoration: BoxDecoration(
-          color: isSelected ? primaryColor.withOpacity(0.15) : Colors.transparent,
+          color: isSelected
+              ? primaryColor.withValues(alpha: 0.15)
+              : Colors.transparent,
           borderRadius: BorderRadius.circular(20),
           border: Border.all(
             color: isSelected ? primaryColor : Colors.transparent,
@@ -636,7 +689,9 @@ class _SourceBrowseScreenState extends State<SourceBrowseScreen> {
           style: TextStyle(
             fontSize: 13,
             fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
-            color: isSelected ? primaryColor : Theme.of(context).textTheme.bodyMedium?.color,
+            color: isSelected
+                ? primaryColor
+                : Theme.of(context).textTheme.bodyMedium?.color,
           ),
         ),
       ),
@@ -687,7 +742,10 @@ class _SourceBrowseScreenState extends State<SourceBrowseScreen> {
                 story.title,
                 maxLines: 2,
                 overflow: TextOverflow.ellipsis,
-                style: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.bold),
+                style: const TextStyle(
+                  fontSize: 12.5,
+                  fontWeight: FontWeight.bold,
+                ),
               ),
               if (story.description.isNotEmpty) ...[
                 const SizedBox(height: 2),
@@ -749,7 +807,10 @@ class _SourceBrowseScreenState extends State<SourceBrowseScreen> {
                         story.title,
                         maxLines: 2,
                         overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(fontSize: 14, fontWeight: FontWeight.bold),
+                        style: const TextStyle(
+                          fontSize: 14,
+                          fontWeight: FontWeight.bold,
+                        ),
                       ),
                       if (story.description.isNotEmpty) ...[
                         const SizedBox(height: 6),
@@ -840,18 +901,11 @@ class _SourceBrowseScreenState extends State<SourceBrowseScreen> {
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            const Icon(
-              Icons.search_off_rounded,
-              size: 64,
-              color: Colors.grey,
-            ),
+            const Icon(Icons.search_off_rounded, size: 64, color: Colors.grey),
             const SizedBox(height: 16),
             const Text(
               'Không tìm thấy dữ liệu',
-              style: TextStyle(
-                fontSize: 17,
-                fontWeight: FontWeight.bold,
-              ),
+              style: TextStyle(fontSize: 17, fontWeight: FontWeight.bold),
             ),
             const SizedBox(height: 8),
             Text(

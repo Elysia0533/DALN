@@ -129,6 +129,12 @@ function seededLibraryData(storyId, overrides = {}) {
   };
 }
 
+function librarySyncData(storyId, overrides = {}) {
+  const data = libraryData(storyId, overrides);
+  delete data.createdAt;
+  return data;
+}
+
 function bookmarkData(bookmarkId, overrides = {}) {
   return {
     id: bookmarkId,
@@ -271,6 +277,96 @@ describe('firestore.rules', () => {
         }),
       );
       await assertSucceeds(deleteDoc(doc(db, 'users/alice/library/story-1')));
+    });
+
+    it('allows owner progress merge before a full story document exists', async () => {
+      const db = authedDb('alice', aliceToken);
+      await assertSucceeds(
+        setDoc(
+          doc(db, 'users/alice/library/story-progress'),
+          {
+            savedChapterIndex: 4,
+            totalChapters: 12,
+            scrollOffset: 128.5,
+            updatedAt: serverTimestamp(),
+            lastReadAt: serverTimestamp(),
+          },
+          { merge: true },
+        ),
+      );
+      await assertSucceeds(getDoc(doc(db, 'users/alice/library/story-progress')));
+    });
+
+    it('allows owner to merge a full story onto an existing progress document', async () => {
+      const db = authedDb('alice', aliceToken);
+      await assertSucceeds(
+        setDoc(
+          doc(db, 'users/alice/library/story-progress-full'),
+          {
+            savedChapterIndex: 4,
+            totalChapters: 12,
+            scrollOffset: 128.5,
+            updatedAt: serverTimestamp(),
+            lastReadAt: serverTimestamp(),
+          },
+          { merge: true },
+        ),
+      );
+      await assertSucceeds(
+        setDoc(
+          doc(db, 'users/alice/library/story-progress-full'),
+          libraryData('story-progress-full'),
+          { merge: true },
+        ),
+      );
+    });
+
+    it('rejects recreated createdAt and preserves it on repeated full sync', async () => {
+      const db = authedDb('alice', aliceToken);
+      const ref = doc(db, 'users/alice/library/story-1');
+      const before = await assertSucceeds(getDoc(ref));
+
+      await assertFails(
+        setDoc(ref, libraryData('story-1'), { merge: true }),
+      );
+      await assertSucceeds(
+        setDoc(
+          ref,
+          librarySyncData('story-1', {
+            story: {
+              ...before.data().story,
+              title: 'Updated Story',
+            },
+            savedChapterIndex: 3,
+          }),
+          { merge: true },
+        ),
+      );
+
+      const after = await assertSucceeds(getDoc(ref));
+      assert.strictEqual(after.data().story.title, 'Updated Story');
+      assert.strictEqual(after.data().savedChapterIndex, 3);
+      assert(after.data().createdAt.isEqual(before.data().createdAt));
+    });
+
+    it('allows a full sync create without optional createdAt', async () => {
+      const db = authedDb('alice', aliceToken);
+      const ref = doc(db, 'users/alice/library/story-without-created-at');
+
+      await assertSucceeds(
+        setDoc(
+          ref,
+          librarySyncData('story-without-created-at'),
+          { merge: true },
+        ),
+      );
+
+      const snapshot = await assertSucceeds(getDoc(ref));
+      assert.strictEqual(snapshot.exists(), true);
+      assert.strictEqual(
+        Object.hasOwn(snapshot.data(), 'createdAt'),
+        false,
+      );
     });
 
     it('denies other-user CRUD', async () => {

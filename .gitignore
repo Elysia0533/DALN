@@ -63,10 +63,17 @@ env.json
 .vs/
 .vscode/
 /apkvbook/
+/backend/
 /scratch/
 /test_extensions/
 /test_plugin_extracted/
 /test_plugin_inspect/
 /vbook_kotlin_test/
+/test_plugin.dart
 *.zip
 *.apk
+
+# Keep the repository focused on application code. The central progress tracker
+# remains versioned because it is part of the project workflow.
+/docs/*
+!/docs/PROJECT_PROGRESS.md

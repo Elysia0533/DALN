@@ -9,22 +9,27 @@ import 'services/api_service.dart';
 import 'services/firebase_backend_service.dart';
 import 'utils/app_performance_logger.dart';
 
-
 void main() async {
   AppPerformanceLogger.startTracking();
   WidgetsFlutterBinding.ensureInitialized();
   AppPerformanceLogger.log('WidgetsBinding initialized');
 
   await FirebaseBackendService.initialize();
-  AppPerformanceLogger.log('Firebase initialized');
+  AppPerformanceLogger.log(
+    FirebaseBackendService.isInitialized
+        ? 'Firebase initialized'
+        : 'Firebase unavailable',
+  );
 
   // Defer heavy offline story initialization to background after runApp
   unawaited(
-    ApiService.initOfflineStories().then((_) {
-      AppPerformanceLogger.log('Background offline stories init complete');
-    }).catchError((e) {
-      debugPrint('Background offline stories init error: $e');
-    }),
+    ApiService.initOfflineStories()
+        .then((_) {
+          AppPerformanceLogger.log('Background offline stories init complete');
+        })
+        .catchError((e) {
+          debugPrint('Background offline stories init error: $e');
+        }),
   );
 
   runApp(
@@ -39,7 +44,6 @@ void main() async {
   );
   AppPerformanceLogger.log('runApp executed - First UI paint initiated');
 }
-
 
 class MyApp extends StatelessWidget {
   const MyApp({super.key});

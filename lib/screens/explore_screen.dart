@@ -18,13 +18,26 @@ import 'online_story_detail_screen.dart';
 import 'extension_screen.dart';
 
 class ExploreScreen extends StatefulWidget {
-  const ExploreScreen({super.key});
+  final Future<DrivePage<Story>> Function({
+    required int pageSize,
+    String? pageToken,
+  })?
+  drivePageLoader;
+  final Future<List<PluginInfo>> Function()? installedPluginsLoader;
+
+  const ExploreScreen({
+    super.key,
+    this.drivePageLoader,
+    this.installedPluginsLoader,
+  });
 
   @override
   State<ExploreScreen> createState() => _ExploreScreenState();
 }
 
 class _ExploreScreenState extends State<ExploreScreen> {
+  static const int _drivePageSize = 15;
+
   List<Story> _serverStories = [];
   final Set<String> _seenStoryIds = {};
   String? _nextPageToken;
@@ -35,6 +48,8 @@ class _ExploreScreenState extends State<ExploreScreen> {
   Object? _loadMoreError;
   bool _isSearching = false;
   bool _isEnrichingMetadata = false;
+  int _driveLoadGeneration = 0;
+  Future<void>? _serverStoriesLoad;
   String? _loadError;
   List<PluginInfo> _installedPlugins = [];
 
@@ -56,9 +71,50 @@ class _ExploreScreenState extends State<ExploreScreen> {
     super.dispose();
   }
 
-  Future<void> _loadServerStories() async {
+  Future<DrivePage<Story>> _fetchDrivePage({
+    required int pageSize,
+    String? pageToken,
+  }) {
+    final loader = widget.drivePageLoader;
+    if (loader != null) {
+      return loader(pageSize: pageSize, pageToken: pageToken);
+    }
+    return GoogleDriveService.fetchStoriesPage(
+      pageSize: pageSize,
+      pageToken: pageToken,
+    );
+  }
+
+  Future<List<PluginInfo>> _loadInstalledPlugins() {
+    return widget.installedPluginsLoader?.call() ??
+        ExtensionService.getInstalledPlugins();
+  }
+
+  Future<void> _loadServerStories() {
+    final inFlightLoad = _serverStoriesLoad;
+    if (inFlightLoad != null) {
+      AppPerformanceLogger.log(
+        '[PERF][EXPLORE] Initial page request coalesced',
+      );
+      return inFlightLoad;
+    }
+
+    late final Future<void> load;
+    load = _performServerStoriesLoad().whenComplete(() {
+      if (identical(_serverStoriesLoad, load)) {
+        _serverStoriesLoad = null;
+      }
+    });
+    _serverStoriesLoad = load;
+    return load;
+  }
+
+  Future<void> _performServerStoriesLoad() async {
+    final generation = ++_driveLoadGeneration;
     setState(() {
       _isLoading = true;
+      _isLoadingMore = false;
+      _isEnrichingMetadata = false;
       _loadError = null;
       _loadMoreError = null;
       _serverStories = [];
@@ -70,7 +126,8 @@ class _ExploreScreenState extends State<ExploreScreen> {
     final stopwatch = Stopwatch()..start();
 
     try {
-      final drivePage = await GoogleDriveService.fetchStoriesPage(pageSize: 50);
+      final drivePage = await _fetchDrivePage(pageSize: _drivePageSize);
+      if (!mounted || generation != _driveLoadGeneration) return;
       for (final story in drivePage.items) {
         final id = story.driveFileId.isNotEmpty ? story.driveFileId : story.id;
         if (_seenStoryIds.add(id)) {
@@ -85,35 +142,39 @@ class _ExploreScreenState extends State<ExploreScreen> {
         '[PERF][EXPLORE] Initial page complete: count=${_serverStories.length}, duration=${stopwatch.elapsedMilliseconds}ms, hasMore=$_hasMore',
       );
     } catch (e) {
+      if (!mounted || generation != _driveLoadGeneration) return;
       _serverStories = [];
       _allGenres = ['Tất cả'];
       _selectedGenres.clear();
       _loadError = _formatLoadError(e);
     }
-    if (mounted) {
-      final plugins = await ExtensionService.getInstalledPlugins();
-      setState(() {
-        _installedPlugins = plugins;
-        _isLoading = false;
-      });
-      unawaited(_enrichMissingDriveMetadata());
-    }
+    if (!mounted || generation != _driveLoadGeneration) return;
+    final plugins = await _loadInstalledPlugins();
+    if (!mounted || generation != _driveLoadGeneration) return;
+    setState(() {
+      _installedPlugins = plugins;
+      _isLoading = false;
+    });
+    unawaited(_enrichMissingDriveMetadata());
   }
 
   Future<void> _loadNextPage() async {
-    if (_isLoadingMore || !_hasMore) return;
+    final pageToken = _nextPageToken;
+    if (_isLoading || _isLoadingMore || !_hasMore || pageToken == null) return;
+    final generation = _driveLoadGeneration;
     setState(() {
       _isLoadingMore = true;
       _loadMoreError = null;
     });
-    AppPerformanceLogger.log('[PERF][EXPLORE] Next page start: pageToken=$_nextPageToken');
+    AppPerformanceLogger.log('[PERF][EXPLORE] Next page start');
     final stopwatch = Stopwatch()..start();
 
     try {
-      final drivePage = await GoogleDriveService.fetchStoriesPage(
-        pageSize: 50,
-        pageToken: _nextPageToken,
+      final drivePage = await _fetchDrivePage(
+        pageSize: _drivePageSize,
+        pageToken: pageToken,
       );
+      if (!mounted || generation != _driveLoadGeneration) return;
 
       int addedCount = 0;
       for (final story in drivePage.items) {
@@ -131,10 +192,11 @@ class _ExploreScreenState extends State<ExploreScreen> {
         '[PERF][EXPLORE] Next page complete: added=$addedCount, total=${_serverStories.length}, duration=${stopwatch.elapsedMilliseconds}ms, hasMore=$_hasMore',
       );
     } catch (e) {
+      if (!mounted || generation != _driveLoadGeneration) return;
       _loadMoreError = e;
       AppPerformanceLogger.log('[PERF][EXPLORE] Page load error: $e');
     } finally {
-      if (mounted) {
+      if (mounted && generation == _driveLoadGeneration) {
         setState(() {
           _isLoadingMore = false;
         });
@@ -143,9 +205,18 @@ class _ExploreScreenState extends State<ExploreScreen> {
   }
 
   Future<void> _refreshServerStories() async {
+    if (_serverStoriesLoad != null || _isLoading) {
+      AppPerformanceLogger.log('[PERF][EXPLORE] Refresh request coalesced');
+      return;
+    }
     AppPerformanceLogger.log('[PERF][EXPLORE] Refresh page start');
-    await _loadServerStories();
-    if (mounted && _loadError == null) {
+    final refresh = _loadServerStories();
+    final generation = _driveLoadGeneration;
+    await refresh;
+    if (mounted &&
+        generation == _driveLoadGeneration &&
+        !_isLoading &&
+        _loadError == null) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Đã làm mới danh sách truyện!')),
       );
@@ -155,7 +226,7 @@ class _ExploreScreenState extends State<ExploreScreen> {
   String _formatLoadError(Object error) {
     final message = error.toString().replaceFirst('Exception: ', '');
     if (message.contains('GOOGLE_DRIVE_API_KEY')) {
-      return 'Chưa cấu hình khóa truy cập Drive. Hãy kiểm tra tham số chạy app trước khi build APK demo.';
+      return 'Chưa cấu hình khóa truy cập Drive. Hãy thêm key vào .env trên Android hoặc tham số build.';
     }
     if (message.contains('GOOGLE_DRIVE_FOLDER_URL')) {
       return 'Chưa cấu hình thư mục truyện trên Drive. Hãy kiểm tra link thư mục dùng cho bản demo.';
@@ -219,6 +290,7 @@ class _ExploreScreenState extends State<ExploreScreen> {
 
   Future<void> _enrichMissingDriveMetadata({bool force = false}) async {
     if (_isEnrichingMetadata || _serverStories.isEmpty) return;
+    final generation = _driveLoadGeneration;
     final targets = _serverStories
         .where(
           (story) =>
@@ -245,7 +317,7 @@ class _ExploreScreenState extends State<ExploreScreen> {
           story,
           force: force,
         );
-        if (!mounted) return;
+        if (!mounted || generation != _driveLoadGeneration) return;
         final index = _serverStories.indexWhere(
           (item) =>
               item.id == enriched.id ||
@@ -259,7 +331,7 @@ class _ExploreScreenState extends State<ExploreScreen> {
         }
       }
     } finally {
-      if (mounted) {
+      if (mounted && generation == _driveLoadGeneration) {
         if (changed) _buildGenreList();
         setState(() => _isEnrichingMetadata = false);
       }
@@ -343,6 +415,7 @@ class _ExploreScreenState extends State<ExploreScreen> {
       },
     );
   }
+
   Future<void> _openExtensionManager() async {
     await Navigator.push(
       context,
@@ -377,13 +450,16 @@ class _ExploreScreenState extends State<ExploreScreen> {
             return Container(
               decoration: BoxDecoration(
                 color: colorScheme.surface,
-                borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
+                borderRadius: const BorderRadius.vertical(
+                  top: Radius.circular(20),
+                ),
               ),
               padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
               child: Column(
                 children: [
                   Container(
-                    width: 36, height: 4,
+                    width: 36,
+                    height: 4,
                     margin: const EdgeInsets.only(bottom: 16),
                     decoration: BoxDecoration(
                       color: Colors.grey.shade400,
@@ -395,12 +471,16 @@ class _ExploreScreenState extends State<ExploreScreen> {
                     children: [
                       Row(
                         children: [
-                          Icon(Icons.language_rounded, color: colorScheme.primary),
+                          Icon(
+                            Icons.language_rounded,
+                            color: colorScheme.primary,
+                          ),
                           const SizedBox(width: 8),
                           Text(
                             'Chọn nguồn truyện',
                             style: TextStyle(
-                              fontSize: 18, fontWeight: FontWeight.bold,
+                              fontSize: 18,
+                              fontWeight: FontWeight.bold,
                               color: colorScheme.onSurface,
                             ),
                           ),
@@ -425,18 +505,34 @@ class _ExploreScreenState extends State<ExploreScreen> {
                         final plugin = plugins[index];
                         return ListTile(
                           leading: CircleAvatar(
-                            backgroundColor: colorScheme.primary.withValues(alpha: 0.12),
-                            child: Icon(Icons.extension_rounded, color: colorScheme.primary),
+                            backgroundColor: colorScheme.primary.withValues(
+                              alpha: 0.12,
+                            ),
+                            child: Icon(
+                              Icons.extension_rounded,
+                              color: colorScheme.primary,
+                            ),
                           ),
-                          title: Text(plugin.name, style: const TextStyle(fontWeight: FontWeight.bold)),
-                          subtitle: Text(plugin.description, maxLines: 1, overflow: TextOverflow.ellipsis),
-                          trailing: Icon(Icons.chevron_right, color: colorScheme.onSurfaceVariant),
+                          title: Text(
+                            plugin.name,
+                            style: const TextStyle(fontWeight: FontWeight.bold),
+                          ),
+                          subtitle: Text(
+                            plugin.description,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                          trailing: Icon(
+                            Icons.chevron_right,
+                            color: colorScheme.onSurfaceVariant,
+                          ),
                           onTap: () {
                             Navigator.pop(ctx);
                             Navigator.push(
                               context,
                               MaterialPageRoute(
-                                builder: (_) => SourceBrowseScreen(plugin: plugin),
+                                builder: (_) =>
+                                    SourceBrowseScreen(plugin: plugin),
                               ),
                             );
                           },
@@ -544,7 +640,7 @@ class _ExploreScreenState extends State<ExploreScreen> {
             ),
             IconButton(
               icon: const Icon(Icons.refresh),
-              onPressed: _refreshServerStories,
+              onPressed: _isLoading ? null : _refreshServerStories,
               tooltip: 'Làm mới Drive',
             ),
             if (userProvider.isAdmin)
@@ -607,7 +703,10 @@ class _ExploreScreenState extends State<ExploreScreen> {
     );
   }
 
-  Widget _buildOnlineSourceSection({required bool isDark, required Color accentColor}) {
+  Widget _buildOnlineSourceSection({
+    required bool isDark,
+    required Color accentColor,
+  }) {
     final plugins = _installedPlugins;
     final colorScheme = Theme.of(context).colorScheme;
 
@@ -617,7 +716,9 @@ class _ExploreScreenState extends State<ExploreScreen> {
         decoration: BoxDecoration(
           color: colorScheme.surface,
           border: Border(
-            bottom: BorderSide(color: colorScheme.outline.withValues(alpha: 0.10)),
+            bottom: BorderSide(
+              color: colorScheme.outline.withValues(alpha: 0.10),
+            ),
           ),
         ),
         child: InkWell(
@@ -628,9 +729,7 @@ class _ExploreScreenState extends State<ExploreScreen> {
             decoration: BoxDecoration(
               color: accentColor.withValues(alpha: 0.08),
               borderRadius: BorderRadius.circular(12),
-              border: Border.all(
-                color: accentColor.withValues(alpha: 0.25),
-              ),
+              border: Border.all(color: accentColor.withValues(alpha: 0.25)),
             ),
             child: Row(
               children: [
@@ -680,7 +779,9 @@ class _ExploreScreenState extends State<ExploreScreen> {
       decoration: BoxDecoration(
         color: colorScheme.surface,
         border: Border(
-          bottom: BorderSide(color: colorScheme.outline.withValues(alpha: 0.10)),
+          bottom: BorderSide(
+            color: colorScheme.outline.withValues(alpha: 0.10),
+          ),
         ),
       ),
       child: Column(
@@ -689,12 +790,17 @@ class _ExploreScreenState extends State<ExploreScreen> {
           Row(
             children: [
               Container(
-                width: 36, height: 36,
+                width: 36,
+                height: 36,
                 decoration: BoxDecoration(
                   color: accentColor.withValues(alpha: 0.12),
                   borderRadius: BorderRadius.circular(8),
                 ),
-                child: Icon(Icons.language_rounded, color: accentColor, size: 20),
+                child: Icon(
+                  Icons.language_rounded,
+                  color: accentColor,
+                  size: 20,
+                ),
               ),
               const SizedBox(width: 10),
               Expanded(
@@ -714,7 +820,10 @@ class _ExploreScreenState extends State<ExploreScreen> {
                 style: TextButton.styleFrom(
                   padding: const EdgeInsets.symmetric(horizontal: 8),
                   minimumSize: const Size(0, 32),
-                  textStyle: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold),
+                  textStyle: const TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.bold,
+                  ),
                 ),
               ),
             ],
@@ -740,11 +849,16 @@ class _ExploreScreenState extends State<ExploreScreen> {
                   },
                   child: Container(
                     width: 200,
-                    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 14,
+                      vertical: 10,
+                    ),
                     decoration: BoxDecoration(
                       color: isDark
                           ? colorScheme.surfaceContainerHighest
-                          : colorScheme.surfaceContainerHighest.withValues(alpha: 0.6),
+                          : colorScheme.surfaceContainerHighest.withValues(
+                              alpha: 0.6,
+                            ),
                       borderRadius: BorderRadius.circular(12),
                       border: Border.all(
                         color: accentColor.withValues(alpha: 0.25),
@@ -755,7 +869,11 @@ class _ExploreScreenState extends State<ExploreScreen> {
                         CircleAvatar(
                           radius: 20,
                           backgroundColor: accentColor.withValues(alpha: 0.14),
-                          child: Icon(Icons.extension_rounded, color: accentColor, size: 20),
+                          child: Icon(
+                            Icons.extension_rounded,
+                            color: accentColor,
+                            size: 20,
+                          ),
                         ),
                         const SizedBox(width: 10),
                         Expanded(
@@ -866,7 +984,7 @@ class _ExploreScreenState extends State<ExploreScreen> {
                 ),
               ),
               IconButton.filledTonal(
-                onPressed: _refreshServerStories,
+                onPressed: _isLoading ? null : _refreshServerStories,
                 tooltip: 'Làm mới Drive',
                 icon: const Icon(Icons.refresh_rounded),
               ),
@@ -1055,17 +1173,16 @@ class _ExploreScreenState extends State<ExploreScreen> {
             crossAxisSpacing: 12,
             mainAxisSpacing: 16,
           ),
-          delegate: SliverChildBuilderDelegate(
-            (context, index) {
-              final story = stories[index];
-              return _StoryCard(
-                key: ValueKey(story.driveFileId.isNotEmpty ? story.driveFileId : story.id),
-                story: story,
-                isDark: isDark,
-              );
-            },
-            childCount: stories.length,
-          ),
+          delegate: SliverChildBuilderDelegate((context, index) {
+            final story = stories[index];
+            return _StoryCard(
+              key: ValueKey(
+                story.driveFileId.isNotEmpty ? story.driveFileId : story.id,
+              ),
+              story: story,
+              isDark: isDark,
+            );
+          }, childCount: stories.length),
         ),
       ),
       if (_isLoadingMore)
@@ -1074,9 +1191,14 @@ class _ExploreScreenState extends State<ExploreScreen> {
             padding: const EdgeInsets.only(bottom: 24, top: 4),
             child: Center(
               child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 16,
+                  vertical: 8,
+                ),
                 decoration: BoxDecoration(
-                  color: Theme.of(context).colorScheme.surfaceContainerHighest.withValues(alpha: 0.6),
+                  color: Theme.of(
+                    context,
+                  ).colorScheme.surfaceContainerHighest.withValues(alpha: 0.6),
                   borderRadius: BorderRadius.circular(20),
                 ),
                 child: Row(

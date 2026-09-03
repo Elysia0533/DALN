@@ -1,7 +1,7 @@
 class SManga {
-  static const int UNKNOWN = 0;
-  static const int ONGOING = 1;
-  static const int COMPLETED = 2;
+  static const int unknown = 0;
+  static const int ongoing = 1;
+  static const int completed = 2;
 
   String url = '';
   String title = '';
@@ -9,7 +9,7 @@ class SManga {
   String author = '';
   String description = '';
   String genre = '';
-  int status = UNKNOWN;
+  int status = unknown;
   String thumbnailUrl = '';
   bool initialized = false;
 

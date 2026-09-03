@@ -254,15 +254,29 @@ class _ExtensionScreenState extends State<ExtensionScreen>
     );
     if (confirm != true) return;
 
-    await ExtensionService.uninstallPlugin(plugin.id);
-    await _loadExtensions();
-    if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Đã gỡ "${plugin.name}"'),
-          behavior: SnackBarBehavior.floating,
-        ),
-      );
+    try {
+      await ExtensionService.uninstallPlugin(plugin.id);
+      await _loadExtensions();
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Đã gỡ "${plugin.name}"'),
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+      }
+    } catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              'Không thể gỡ extension: ${error.toString().replaceFirst('Exception: ', '')}',
+            ),
+            backgroundColor: Colors.red.shade700,
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+      }
     }
   }
 

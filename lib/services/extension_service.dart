@@ -23,6 +23,9 @@ class ExtensionUrlValidationResult {
   String get host => uri?.host ?? '';
 }
 
+typedef PluginEngineLoader = Future<bool> Function(String id, String dirPath);
+typedef PluginEngineCloser = Future<void> Function(String id);
+
 /// Service quản lý extension/plugin nguồn truyện online
 class ExtensionService {
   static const String _defaultRegistryUrl =
@@ -31,6 +34,7 @@ class ExtensionService {
       'https://raw.githubusercontent.com/Darkrai9x/vbook-extensions/master/plugin.json';
   static const String _prefsKeyInstalled = 'installed_plugins';
   static const String _prefsKeyRegistries = 'plugin_registries';
+  static int _installValidationSequence = 0;
 
   /// Các registry được tích hợp sẵn (luôn có, không thể xóa)
   static const List<String> _builtinRegistries = [
@@ -182,62 +186,20 @@ class ExtensionService {
 
   // ── Install plugin ──
   static Future<void> installPlugin(PluginInfo plugin) async {
+    PluginLoader.validatePluginId(plugin.id);
     final installed = await getInstalledPlugins();
-    final idx = installed.indexWhere((p) => p.id == plugin.id);
 
     final zipUrl = _validatedUrlOrThrow(
       plugin.downloadUrl.isNotEmpty ? plugin.downloadUrl : plugin.source,
     );
-    final zipUrlScheme = Uri.parse(zipUrl).scheme.toLowerCase();
-    if (zipUrl.isEmpty || (zipUrlScheme != 'http' && zipUrlScheme != 'https')) {
-      throw Exception('URL tai extension khong hop le.');
-    }
 
     debugPrint(
       '[ExtensionService] installPlugin: downloading plugin ${plugin.id}',
     );
-    final dirPath = await PluginLoader.installPlugin(zipUrl, plugin.id);
-    if (dirPath == null) {
-      throw Exception('Không thể tải hoặc giải nén extension');
-    }
-
-    // Verify plugin.json exists after extraction (basic sanity check)
-    final pluginJsonFile = File('$dirPath/plugin.json');
-    final srcDir = Directory('$dirPath/src');
-    if (!pluginJsonFile.existsSync()) {
-      // Check one level deeper (some zips have a single subfolder)
-      final subDirs = Directory(
-        dirPath,
-      ).listSync().whereType<Directory>().toList();
-      bool foundInSub = false;
-      if (subDirs.length == 1) {
-        final subPluginJson = File('${subDirs.first.path}/plugin.json');
-        foundInSub = subPluginJson.existsSync();
-      }
-      if (!foundInSub) {
-        debugPrint('[ExtensionService] plugin.json not found in $dirPath');
-        // Don't throw - many valid extensions may have different structures
-        // The native JsLoader handles various structures
-      }
-    }
-
-    // Mandatory engine load validation
-    bool loaded = false;
-    try {
-      loaded = await VBookEngineChannel.loadSource(plugin.id, dirPath);
-    } catch (e) {
-      await _safeCleanupDir(dirPath);
-      throw Exception(
-        'Không thể khởi tạo extension engine cho "${plugin.name}": ${e.toString().replaceAll('Exception: ', '')}',
-      );
-    }
-
-    if (!loaded) {
-      await _safeCleanupDir(dirPath);
-      throw Exception(
-        'Không thể khởi tạo extension engine cho "${plugin.name}".',
-      );
-    }
+    final prepared = await PluginLoader.prepareInstallFromUrl(
+      zipUrl,
+      customId: plugin.id,
+    );
 
     final updatedPlugin = PluginInfo(
       id: plugin.id,
@@ -255,136 +217,270 @@ class ExtensionService {
       isInstalled: true,
       installedVersion: plugin.version,
     );
-
-    if (idx >= 0) {
-      installed[idx] = updatedPlugin;
-    } else {
-      installed.add(updatedPlugin);
-    }
-
-    await _saveInstalledPlugins(installed);
-  }
-
-  static Future<void> _safeCleanupDir(String dirPath) async {
-    try {
-      final dir = Directory(dirPath);
-      if (await dir.exists()) {
-        await dir.delete(recursive: true);
-      }
-    } catch (e) {
-      debugPrint('[ExtensionService] _safeCleanupDir error: $e');
-    }
+    await _installPreparedPlugin(
+      prepared: prepared,
+      plugin: updatedPlugin,
+      installedPlugins: installed,
+    );
   }
 
   // ── Cài đặt plugin từ file ZIP cục bộ ──
-  static Future<PluginInfo> installFromZipFile(File zipFile) async {
-    final result = await PluginLoader.extractZipFile(zipFile);
-    if (result == null) {
-      throw Exception('Không thể giải nén file ZIP extension.');
-    }
-
-    final pluginId = result['pluginId'] as String;
-    final dirPath = result['dirPath'] as String;
-    final jsonMap = result['jsonMap'] as Map<String, dynamic>?;
-
-    PluginInfo plugin;
-    if (jsonMap != null) {
-      plugin = PluginInfo.fromRegistryJson(jsonMap);
-    } else {
-      plugin = PluginInfo(
-        id: pluginId,
-        name: pluginId,
-        author: 'Local',
-        source: 'local_file',
-        iconUrl: '',
-        description: 'Extension cài thủ công từ file ZIP',
-        type: 'novel',
-        locale: 'vi',
-        version: 1,
-        downloadUrl: '',
-        isNsfw: false,
-        scripts: const {},
-      );
-    }
-
-    // Mandatory engine load validation
-    bool loaded = false;
-    try {
-      loaded = await VBookEngineChannel.loadSource(pluginId, dirPath);
-    } catch (e) {
-      await _safeCleanupDir(dirPath);
-      throw Exception(
-        'Không thể khởi tạo extension engine cho "$pluginId": ${e.toString().replaceAll('Exception: ', '')}',
-      );
-    }
-
-    if (!loaded) {
-      await _safeCleanupDir(dirPath);
-      throw Exception('Không thể khởi tạo extension engine cho "$pluginId".');
-    }
-
-    final installed = await getInstalledPlugins();
-    plugin.isInstalled = true;
-    plugin.installedVersion = plugin.version;
-
-    installed.removeWhere((p) => p.id == pluginId);
-    installed.add(plugin);
-    await _saveInstalledPlugins(installed);
-
-    return plugin;
+  static Future<PluginInfo> installFromZipFile(
+    File zipFile, {
+    Directory? pluginsRoot,
+    PluginArchiveLimits limits = PluginLoader.defaultArchiveLimits,
+    PluginEngineLoader? engineLoader,
+    PluginEngineCloser? engineCloser,
+  }) async {
+    final installed = await getInstalledPlugins(pluginsRoot: pluginsRoot);
+    final prepared = await PluginLoader.prepareInstallFromZipFile(
+      zipFile,
+      pluginsRoot: pluginsRoot,
+      limits: limits,
+    );
+    return _installPreparedLocalPlugin(
+      prepared,
+      installedPlugins: installed,
+      engineLoader: engineLoader,
+      engineCloser: engineCloser,
+    );
   }
 
   // ── Cài đặt plugin từ URL file ZIP trực tiếp ──
-  static Future<PluginInfo> installFromZipUrl(String zipUrl) async {
+  static Future<PluginInfo> installFromZipUrl(
+    String zipUrl, {
+    Directory? pluginsRoot,
+    Directory? temporaryRoot,
+    PluginArchiveLimits limits = PluginLoader.defaultArchiveLimits,
+    PluginEngineLoader? engineLoader,
+    PluginEngineCloser? engineCloser,
+    http.Client? client,
+  }) async {
     final validatedZipUrl = _validatedUrlOrThrow(zipUrl);
-    final response = await http
-        .get(Uri.parse(validatedZipUrl))
-        .timeout(const Duration(seconds: 30));
-    if (response.statusCode != 200) {
-      throw Exception(
-        'Không thể tải file ZIP từ URL (HTTP ${response.statusCode})',
+    final installed = await getInstalledPlugins(pluginsRoot: pluginsRoot);
+    final prepared = await PluginLoader.prepareInstallFromUrl(
+      validatedZipUrl,
+      pluginsRoot: pluginsRoot,
+      temporaryRoot: temporaryRoot,
+      limits: limits,
+      client: client,
+    );
+    return _installPreparedLocalPlugin(
+      prepared,
+      installedPlugins: installed,
+      engineLoader: engineLoader,
+      engineCloser: engineCloser,
+    );
+  }
+
+  static Future<PluginInfo> _installPreparedLocalPlugin(
+    PreparedPluginInstall prepared, {
+    required List<PluginInfo> installedPlugins,
+    PluginEngineLoader? engineLoader,
+    PluginEngineCloser? engineCloser,
+  }) async {
+    try {
+      final parsed = PluginInfo.fromRegistryJson(prepared.pluginJson);
+      final plugin = PluginInfo(
+        id: prepared.pluginId,
+        name: parsed.name.isEmpty ? prepared.pluginId : parsed.name,
+        author: parsed.author,
+        source: parsed.source.isEmpty ? 'local_file' : parsed.source,
+        iconUrl: parsed.iconUrl,
+        description: parsed.description.isEmpty
+            ? 'Extension cài thủ công từ file ZIP'
+            : parsed.description,
+        type: parsed.type,
+        locale: parsed.locale,
+        version: parsed.version,
+        downloadUrl: parsed.downloadUrl,
+        isNsfw: parsed.isNsfw,
+        scripts: parsed.scripts,
+        isInstalled: true,
+        installedVersion: parsed.version,
+      );
+      await _installPreparedPlugin(
+        prepared: prepared,
+        plugin: plugin,
+        installedPlugins: installedPlugins,
+        engineLoader: engineLoader,
+        engineCloser: engineCloser,
+      );
+      return plugin;
+    } catch (_) {
+      if (!prepared.isCompleted) {
+        await prepared.rollback();
+      }
+      rethrow;
+    }
+  }
+
+  static Future<void> _installPreparedPlugin({
+    required PreparedPluginInstall prepared,
+    required PluginInfo plugin,
+    required List<PluginInfo> installedPlugins,
+    PluginEngineLoader? engineLoader,
+    PluginEngineCloser? engineCloser,
+  }) async {
+    if (prepared.pluginId != plugin.id) {
+      await prepared.rollback();
+      throw const PluginInstallException(
+        PluginInstallFailure.invalidPluginId,
+        'ID extension trong giao dịch cài đặt không khớp.',
       );
     }
-    final tempDirPath = await PluginLoader.getPluginDir('_temp_download');
-    final tempDir = Directory(tempDirPath);
-    if (!await tempDir.exists()) {
-      await tempDir.create(recursive: true);
+
+    final loadSource = engineLoader ?? VBookEngineChannel.loadSource;
+    final closeSource = engineCloser ?? VBookEngineChannel.closeSource;
+    final validationId =
+        'vbook_install_validation_${DateTime.now().microsecondsSinceEpoch}_${_installValidationSequence++}';
+
+    try {
+      await prepared.recordExpectedInstalledPlugin(plugin.toJson());
+      final stagingLoaded = await loadSource(
+        validationId,
+        prepared.stagingDirectoryPath,
+      );
+      if (!stagingLoaded) {
+        throw Exception(
+          'Không thể xác thực extension engine cho "${plugin.name}".',
+        );
+      }
+    } catch (error) {
+      await prepared.rollback();
+      throw Exception(
+        'Không thể xác thực extension engine cho "${plugin.name}": ${_cleanError(error)}',
+      );
+    } finally {
+      await closeSource(validationId);
     }
-    final tempFile = File('${tempDir.path}/temp_plugin.zip');
-    await tempFile.writeAsBytes(response.bodyBytes);
-    final plugin = await installFromZipFile(tempFile);
-    if (await tempFile.exists()) {
-      await tempFile.delete();
+
+    var finalLoadAttempted = false;
+    try {
+      await prepared.commit();
+      finalLoadAttempted = true;
+      final loaded = await loadSource(plugin.id, prepared.targetDirectoryPath);
+      if (!loaded) {
+        throw Exception(
+          'Không thể khởi tạo extension engine cho "${plugin.name}".',
+        );
+      }
+
+      final nextInstalled = List<PluginInfo>.from(installedPlugins);
+      final existingIndex = nextInstalled.indexWhere(
+        (installed) => installed.id == plugin.id,
+      );
+      if (existingIndex >= 0) {
+        nextInstalled[existingIndex] = plugin;
+      } else {
+        nextInstalled.add(plugin);
+      }
+      await _saveInstalledPlugins(nextInstalled);
+    } catch (error) {
+      if (finalLoadAttempted) {
+        await closeSource(plugin.id);
+      }
+
+      Object? rollbackError;
+      try {
+        await prepared.rollback();
+      } catch (caughtRollbackError) {
+        rollbackError = caughtRollbackError;
+      }
+
+      if (prepared.hadExistingPlugin &&
+          await Directory(prepared.targetDirectoryPath).exists()) {
+        try {
+          await loadSource(plugin.id, prepared.targetDirectoryPath);
+        } catch (restoreError) {
+          debugPrint(
+            '[ExtensionService] Could not reload previous plugin ${plugin.id}: ${_cleanError(restoreError)}',
+          );
+        }
+      }
+
+      final rollbackMessage = rollbackError == null
+          ? ''
+          : ' Không thể rollback hoàn toàn: ${_cleanError(rollbackError)}';
+      throw Exception('${_cleanError(error)}$rollbackMessage');
     }
-    return plugin;
+
+    try {
+      await prepared.complete();
+    } catch (error) {
+      debugPrint(
+        '[ExtensionService] Installed ${plugin.id}, but backup cleanup failed: ${_cleanError(error)}',
+      );
+    }
+  }
+
+  static String _cleanError(Object error) {
+    return error.toString().replaceFirst(RegExp(r'^Exception:\s*'), '');
   }
 
   // ── Uninstall plugin ──
-  static Future<void> uninstallPlugin(String pluginId) async {
-    final installed = await getInstalledPlugins();
-    installed.removeWhere((p) => p.id == pluginId);
+  static Future<void> uninstallPlugin(
+    String pluginId, {
+    Directory? pluginsRoot,
+    PluginEngineCloser? engineCloser,
+  }) async {
+    final safePluginId = PluginLoader.validatePluginId(pluginId);
+    final installed = await getInstalledPlugins(pluginsRoot: pluginsRoot);
+    final closeSource = engineCloser ?? VBookEngineChannel.closeSource;
+
+    await closeSource(safePluginId);
+    await PluginLoader.deletePlugin(safePluginId, pluginsRoot: pluginsRoot);
+    installed.removeWhere((p) => p.id == safePluginId);
     await _saveInstalledPlugins(installed);
   }
 
   // ── Get installed plugins ──
-  static Future<List<PluginInfo>> getInstalledPlugins() async {
+  static Future<List<PluginInfo>> getInstalledPlugins({
+    Directory? pluginsRoot,
+  }) async {
     final prefs = await SharedPreferences.getInstance();
     final raw = prefs.getString(_prefsKeyInstalled);
-    if (raw == null || raw.isEmpty) return [];
-    try {
-      final list = jsonDecode(raw) as List<dynamic>;
-      return list
-          .map((item) => PluginInfo.fromJson(item as Map<String, dynamic>))
-          .toList();
-    } catch (e) {
-      return [];
+    var installed = <PluginInfo>[];
+    if (raw != null && raw.isNotEmpty) {
+      try {
+        final list = jsonDecode(raw) as List<dynamic>;
+        installed = list
+            .map((item) => PluginInfo.fromJson(item as Map<String, dynamic>))
+            .toList();
+      } catch (_) {
+        installed = <PluginInfo>[];
+      }
     }
+
+    try {
+      final recovery = await PluginLoader.recoverInterruptedInstalls(
+        pluginsRoot: pluginsRoot,
+        installedPluginStates: {
+          for (final plugin in installed) plugin.id: plugin.toJson(),
+        },
+      );
+      if (recovery.hasFailures) {
+        debugPrint(
+          '[ExtensionService] ${recovery.failedTransactions} interrupted '
+          'extension transaction(s) still require attention.',
+        );
+      }
+    } catch (error) {
+      debugPrint(
+        '[ExtensionService] Extension recovery could not start '
+        '(${error.runtimeType}).',
+      );
+    }
+    return installed;
   }
 
   static Future<void> _saveInstalledPlugins(List<PluginInfo> plugins) async {
     final prefs = await SharedPreferences.getInstance();
     final jsonStr = jsonEncode(plugins.map((p) => p.toJson()).toList());
-    await prefs.setString(_prefsKeyInstalled, jsonStr);
+    final saved = await prefs.setString(_prefsKeyInstalled, jsonStr);
+    if (!saved) {
+      throw Exception('Không thể lưu trạng thái extension đã cài đặt.');
+    }
   }
 
   // ── Fetch tất cả registry (multi-source) ──
