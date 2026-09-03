@@ -73,7 +73,5 @@ env.json
 *.zip
 *.apk
 
-# Keep the repository focused on application code. The central progress tracker
-# remains versioned because it is part of the project workflow.
+# Keep local agent/project documents out of the application repository.
 /docs/*
-!/docs/PROJECT_PROGRESS.md
