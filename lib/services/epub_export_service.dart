@@ -1,7 +1,13 @@
 import 'dart:convert';
 import 'dart:io';
 import 'package:archive/archive.dart';
+import 'package:flutter/foundation.dart';
+import 'package:image/image.dart' as img;
+import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
+import '../models/online_chapter_content.dart';
+import 'book_file_names.dart';
+import 'chapter_image_service.dart';
 
 class EpubExportService {
   static final EpubExportService instance = EpubExportService._internal();
@@ -78,7 +84,10 @@ class EpubExportService {
   Future<File?> exportToEpub({
     required String storyTitle,
     required String author,
-    required List<Map<String, String>> chapters, // [{ 'title': ..., 'content': ... }]
+    required List<Map<String, String>>
+    chapters, // [{ 'title': ..., 'content': ... }]
+    Directory? outputDirectory,
+    Directory? imageRootDirectory,
   }) async {
     if (chapters.isEmpty) return null;
 
@@ -86,7 +95,10 @@ class EpubExportService {
 
     // 1. mimetype (Must be first file and uncompressed)
     final mimetypeData = utf8.encode('application/epub+zip');
-    archive.addFile(ArchiveFile('mimetype', mimetypeData.length, mimetypeData)..compress = false);
+    archive.addFile(
+      ArchiveFile('mimetype', mimetypeData.length, mimetypeData)
+        ..compress = false,
+    );
 
     // 2. META-INF/container.xml
     final containerXml = '''<?xml version="1.0"?>
@@ -95,27 +107,79 @@ class EpubExportService {
       <rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/>
    </rootfiles>
 </container>''';
-    archive.addFile(ArchiveFile('META-INF/container.xml', utf8.encode(containerXml).length, utf8.encode(containerXml)));
+    archive.addFile(
+      ArchiveFile(
+        'META-INF/container.xml',
+        utf8.encode(containerXml).length,
+        utf8.encode(containerXml),
+      ),
+    );
 
     // 3. Generate chapters XHTML files
     final List<String> manifestItems = [];
     final List<String> spineItems = [];
     final List<String> navPoints = [];
+    var imageBytes = 0;
+    var imageCount = 0;
+    final bookId =
+        'urn:uuid:vbook-export-${DateTime.now().microsecondsSinceEpoch}';
 
     for (int i = 0; i < chapters.length; i++) {
       final title = chapters[i]['title'] ?? 'Chương ${i + 1}';
       final rawContent = chapters[i]['content'] ?? '';
-      
-      final cleanedText = cleanTextForEpub(rawContent);
 
-      final formattedLines = cleanedText
-          .split('\n')
-          .map((line) => line.trim())
-          .where((line) => line.isNotEmpty)
-          .map((line) => '<p>${htmlEscape.convert(line)}</p>')
-          .join('\n');
+      final content = OnlineChapterContent.decode(
+        rawContent,
+        chapterUrl: '',
+        sourceType: 'novel',
+      );
+      final markup = StringBuffer();
+      for (final block in content.blocks) {
+        if (!block.isImage) {
+          for (final line in block.value.split('\n')) {
+            if (line.trim().isNotEmpty) {
+              markup.writeln('<p>${htmlEscape.convert(line.trim())}</p>');
+            }
+          }
+          continue;
+        }
+        if (!block.isLocal || imageRootDirectory == null) {
+          throw const FormatException(
+            'Ảnh chưa có trên máy. Hãy tải lại chương trước khi xuất EPUB.',
+          );
+        }
+        final file = File(block.value);
+        final root = await imageRootDirectory.resolveSymbolicLinks();
+        if (!p.isWithin(root, await file.resolveSymbolicLinks()) ||
+            await file.length() > ChapterImageService.maxBytes) {
+          throw const FormatException('Invalid offline image.');
+        }
+        var bytes = await file.readAsBytes();
+        var extension = ChapterImageService.extensionFor(bytes);
+        if (extension == 'webp' || extension == 'bmp') {
+          bytes = await compute(_convertToPng, bytes);
+          extension = 'png';
+        }
+        imageBytes += bytes.length;
+        if (imageBytes > 128 * 1024 * 1024) {
+          throw const FormatException(
+            'Ảnh trong EPUB vượt giới hạn xuất 128 MiB.',
+          );
+        }
+        final name = 'images/image_${imageCount++}.$extension';
+        archive.addFile(ArchiveFile('OEBPS/$name', bytes.length, bytes));
+        final mime = extension == 'jpg' ? 'image/jpeg' : 'image/$extension';
+        manifestItems.add(
+          '<item id="image_$imageCount" href="$name" media-type="$mime"/>',
+        );
+        markup.writeln(
+          '<div><img src="$name" alt="Minh họa" style="max-width:100%;height:auto;"/></div>',
+        );
+      }
+      final formattedLines = markup.toString();
 
-      final chapterHtml = '''<?xml version="1.0" encoding="utf-8"?>
+      final chapterHtml =
+          '''<?xml version="1.0" encoding="utf-8"?>
 <!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.1//EN" "http://www.w3.org/TR/xhtml11/DTD/xhtml11.dtd">
 <html xmlns="http://www.w3.org/1999/xhtml">
 <head>
@@ -133,9 +197,17 @@ class EpubExportService {
 </html>''';
 
       final filename = 'chapter_$i.html';
-      archive.addFile(ArchiveFile('OEBPS/$filename', utf8.encode(chapterHtml).length, utf8.encode(chapterHtml)));
+      archive.addFile(
+        ArchiveFile(
+          'OEBPS/$filename',
+          utf8.encode(chapterHtml).length,
+          utf8.encode(chapterHtml),
+        ),
+      );
 
-      manifestItems.add('<item id="chap_$i" href="$filename" media-type="application/xhtml+xml"/>');
+      manifestItems.add(
+        '<item id="chap_$i" href="$filename" media-type="application/xhtml+xml"/>',
+      );
       spineItems.add('<itemref idref="chap_$i"/>');
       navPoints.add('''<navPoint id="navPoint-${i + 1}" playOrder="${i + 1}">
   <navLabel><text>${htmlEscape.convert(title)}</text></navLabel>
@@ -144,11 +216,12 @@ class EpubExportService {
     }
 
     // 4. OEBPS/toc.ncx
-    final ncxContent = '''<?xml version="1.0" encoding="UTF-8"?>
+    final ncxContent =
+        '''<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE ncx PUBLIC "-//NISO//DTD ncx 2005-1//EN" "http://www.daisy.org/z3986/2005/ncx-2005-1.dtd">
 <ncx xmlns="http://www.daisy.org/z3986/2005/ncx/" version="2005-1">
   <head>
-    <meta name="dtb:uid" content="urn:uuid:vbook-export-${DateTime.now().millisecondsSinceEpoch}"/>
+    <meta name="dtb:uid" content="$bookId"/>
     <meta name="dtb:depth" content="1"/>
     <meta name="dtb:totalPageCount" content="0"/>
     <meta name="dtb:maxPageNumber" content="0"/>
@@ -158,16 +231,23 @@ class EpubExportService {
     ${navPoints.join('\n    ')}
   </navMap>
 </ncx>''';
-    archive.addFile(ArchiveFile('OEBPS/toc.ncx', utf8.encode(ncxContent).length, utf8.encode(ncxContent)));
+    archive.addFile(
+      ArchiveFile(
+        'OEBPS/toc.ncx',
+        utf8.encode(ncxContent).length,
+        utf8.encode(ncxContent),
+      ),
+    );
 
     // 5. OEBPS/content.opf
-    final opfContent = '''<?xml version="1.0" encoding="UTF-8"?>
+    final opfContent =
+        '''<?xml version="1.0" encoding="UTF-8"?>
 <package xmlns="http://www.idpf.org/2007/opf" unique-identifier="BookId" version="2.0">
   <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
     <dc:title>${htmlEscape.convert(storyTitle)}</dc:title>
     <dc:creator>${htmlEscape.convert(author)}</dc:creator>
     <dc:language>vi</dc:language>
-    <dc:identifier id="BookId">urn:uuid:vbook-export-${DateTime.now().millisecondsSinceEpoch}</dc:identifier>
+    <dc:identifier id="BookId">$bookId</dc:identifier>
   </metadata>
   <manifest>
     <item id="ncx" href="toc.ncx" media-type="application/x-dtbncx+xml"/>
@@ -177,19 +257,50 @@ class EpubExportService {
     ${spineItems.join('\n    ')}
   </spine>
 </package>''';
-    archive.addFile(ArchiveFile('OEBPS/content.opf', utf8.encode(opfContent).length, utf8.encode(opfContent)));
+    archive.addFile(
+      ArchiveFile(
+        'OEBPS/content.opf',
+        utf8.encode(opfContent).length,
+        utf8.encode(opfContent),
+      ),
+    );
 
     // Zip and write file
-    final zipEncoder = ZipEncoder();
-    final epubBytes = zipEncoder.encode(archive);
+    final epubBytes = await compute(_encodeArchive, archive);
     if (epubBytes == null) return null;
 
-    final downloadsDir = await getExternalStorageDirectory() ?? await getApplicationDocumentsDirectory();
-    final sanitizeName = storyTitle.replaceAll(RegExp(r'[\\/:*?"<>|]'), '_');
-    final epubFile = File('${downloadsDir.path}/$sanitizeName.epub');
+    final downloadsDir =
+        outputDirectory ??
+        await getExternalStorageDirectory() ??
+        await getApplicationDocumentsDirectory();
+    final epubFile = await BookFileNames.availableFile(
+      downloadsDir,
+      storyTitle,
+      'epub',
+    );
     await epubFile.writeAsBytes(epubBytes);
 
     return epubFile;
   }
-}
 
+  static List<int>? _encodeArchive(Archive archive) =>
+      ZipEncoder().encode(archive);
+
+  static Uint8List _convertToPng(Uint8List bytes) {
+    final decoder = img.findDecoderForData(bytes);
+    final info = decoder?.startDecode(bytes);
+    if (info == null ||
+        info.width <= 0 ||
+        info.height <= 0 ||
+        info.width * info.height > 24 * 1024 * 1024) {
+      throw const FormatException('Ảnh vượt giới hạn chuyển đổi EPUB.');
+    }
+    final decoded = decoder!.decodeFrame(0);
+    if (decoded == null) throw const FormatException('Ảnh EPUB không hợp lệ.');
+    final output = Uint8List.fromList(img.encodePng(decoded));
+    if (output.length > ChapterImageService.maxBytes) {
+      throw const FormatException('Ảnh EPUB quá lớn.');
+    }
+    return output;
+  }
+}

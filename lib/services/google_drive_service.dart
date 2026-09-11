@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:collection';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data' show BytesBuilder;
 
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
@@ -124,10 +125,7 @@ class GoogleDriveService {
   static Future<List<Story>> fetchStoriesFromConfiguredFolder({
     Iterable<String> extraFolderUrls = const [],
   }) async {
-    final folderUrls = {
-      ..._configuredFolderUrls(),
-      ...extraFolderUrls,
-    }.toList();
+    final folderUrls = configuredFolderInputs(extraFolderUrls: extraFolderUrls);
     if (folderUrls.isEmpty) {
       throw Exception(
         'Thiếu GOOGLE_DRIVE_FOLDER_URL hoặc GOOGLE_DRIVE_FOLDER_URLS. Hãy truyền link thư mục Drive bằng --dart-define.',
@@ -206,12 +204,17 @@ class GoogleDriveService {
         .toList();
   }
 
-  static List<String> _configuredFolderUrls() {
+  static List<String> configuredFolderInputs({
+    Iterable<String> extraFolderUrls = const [],
+  }) {
     return {
       ...demoFolderUrls,
       ...parseFolderInputs(defaultFolderUrls),
       ...parseFolderInputs(defaultFolderUrl),
-    }.toList();
+      ...extraFolderUrls
+          .map((input) => input.trim())
+          .where((input) => input.isNotEmpty),
+    }.toList(growable: false);
   }
 
   static List<Story> _dedupeStories(List<Story> stories) {
@@ -582,6 +585,10 @@ class GoogleDriveService {
         warningCount++;
         continue;
       }
+      if (_catalogRevisionConflicts(entry.value, driveFile)) {
+        warningCount++;
+        continue;
+      }
       fileRecords[entry.key] = _mergeCatalogRecord(
         entry.value,
         driveFile: driveFile,
@@ -654,29 +661,52 @@ class GoogleDriveService {
     );
   }
 
+  static bool _catalogRevisionConflicts(
+    DriveMetadataRecord catalog,
+    _DriveFile driveFile,
+  ) {
+    final catalogMime = catalog.mimeType.trim().toLowerCase();
+    if (catalogMime.isNotEmpty &&
+        catalogMime != 'application/octet-stream' &&
+        catalogMime != _effectiveMimeType(driveFile).toLowerCase()) {
+      return true;
+    }
+    if (catalog.fileSize != null &&
+        driveFile.fileSize != null &&
+        catalog.fileSize != driveFile.fileSize) {
+      return true;
+    }
+    final catalogChecksum = _readString(catalog.checksum);
+    final driveChecksum = _readString(driveFile.md5Checksum);
+    if (catalogChecksum != null && driveChecksum != null) {
+      return catalogChecksum != driveChecksum;
+    }
+    return catalog.modifiedTime != null &&
+        driveFile.modifiedTime != null &&
+        catalog.modifiedTime!.toUtc() != driveFile.modifiedTime!.toUtc();
+  }
+
   static DriveMetadataRecord _mergeCatalogRecord(
     DriveMetadataRecord catalog, {
-    required _DriveFile? driveFile,
-    required DriveMetadataRecord? fallback,
+    required _DriveFile driveFile,
+    required DriveMetadataRecord fallback,
   }) {
     return DriveMetadataRecord(
       driveFileId: catalog.driveFileId,
-      fileName: catalog.fileName.isNotEmpty
-          ? catalog.fileName
-          : driveFile?.name ?? fallback?.fileName ?? '',
+      fileName: catalog.fileName.isNotEmpty ? catalog.fileName : driveFile.name,
       title: catalog.title,
-      mimeType: driveFile == null
-          ? catalog.mimeType
-          : _effectiveMimeType(driveFile),
-      modifiedTime: driveFile?.modifiedTime ?? catalog.modifiedTime,
-      fileSize: driveFile?.fileSize ?? catalog.fileSize,
-      checksum: driveFile?.md5Checksum ?? catalog.checksum,
+      mimeType: _effectiveMimeType(driveFile),
+      // Only live listing fields establish the revision used for SQL reuse.
+      // Catalog hints may be stale even when the file ID still exists.
+      modifiedTime: driveFile.modifiedTime,
+      fileSize: driveFile.fileSize,
+      checksum: driveFile.md5Checksum,
       description: catalog.description,
-      coverFileId: catalog.coverFileId ?? fallback?.coverFileId,
+      coverFileId: catalog.coverFileId ?? fallback.coverFileId,
       coverUrl:
           catalog.coverUrl ??
-          fallback?.coverUrl ??
-          _readString(driveFile?.thumbnailLink),
+          fallback.coverUrl ??
+          _readString(driveFile.thumbnailLink),
       metadataStatus: catalog.metadataStatus,
       origin: DriveMetadataOrigin.catalog,
       authors: catalog.authors,
@@ -753,7 +783,7 @@ class GoogleDriveService {
     return _fetchStoriesPage(
       pageSize: pageSize,
       pageToken: pageToken,
-      folderUrls: {..._configuredFolderUrls(), ...extraFolderUrls},
+      folderUrls: configuredFolderInputs(extraFolderUrls: extraFolderUrls),
       requestApiKey: requestApiKey,
     );
   }
@@ -1253,6 +1283,162 @@ class GoogleDriveService {
 
     throw Exception('Lỗi khi tải file từ Drive: $lastError');
   }
+
+  static const textMetadataPrefixBytes = 512 * 1024;
+  static const epubMetadataMaxBytes = 16 * 1024 * 1024;
+
+  static Future<Uint8List> downloadEpubMetadataFile(String fileId) async {
+    final key = await _requireApiKey();
+    final uri = Uri.parse(getApiDownloadUrl(fileId, requestApiKey: key));
+    final headers = await _headersForUri(uri);
+    return _downloadMetadataBytes(
+      fileId,
+      uri,
+      headers,
+      http.Client(),
+      maxBytes: epubMetadataMaxBytes,
+      prefixOnly: false,
+      timeout: const Duration(seconds: 90),
+    );
+  }
+
+  @visibleForTesting
+  static Future<Uint8List> downloadEpubMetadataFileForTesting({
+    required String fileId,
+    required http.Client client,
+    Map<String, String> restrictionHeaders = const {},
+    Duration timeout = const Duration(seconds: 90),
+  }) => _downloadMetadataBytes(
+    fileId,
+    Uri.https('www.googleapis.com', '/drive/v3/files/$fileId', {
+      'alt': 'media',
+    }),
+    restrictionHeaders,
+    client,
+    maxBytes: epubMetadataMaxBytes,
+    prefixOnly: false,
+    timeout: timeout,
+  );
+
+  static Future<Uint8List> downloadTextMetadataPrefix(String fileId) async {
+    final key = await _requireApiKey();
+    final uri = Uri.parse(getApiDownloadUrl(fileId, requestApiKey: key));
+    final headers = await _headersForUri(uri);
+    return _downloadMetadataBytes(
+      fileId,
+      uri,
+      headers,
+      http.Client(),
+      maxBytes: textMetadataPrefixBytes,
+      prefixOnly: true,
+    );
+  }
+
+  @visibleForTesting
+  static Future<Uint8List> downloadTextMetadataPrefixForTesting({
+    required String fileId,
+    required http.Client client,
+    Map<String, String> restrictionHeaders = const {},
+    Duration timeout = const Duration(seconds: 25),
+  }) => _downloadMetadataBytes(
+    fileId,
+    Uri.https('www.googleapis.com', '/drive/v3/files/$fileId', {
+      'alt': 'media',
+    }),
+    restrictionHeaders,
+    client,
+    maxBytes: textMetadataPrefixBytes,
+    prefixOnly: true,
+    timeout: timeout,
+  );
+
+  static Future<Uint8List> _downloadMetadataBytes(
+    String fileId,
+    Uri uri,
+    Map<String, String> headers,
+    http.Client client, {
+    required int maxBytes,
+    required bool prefixOnly,
+    Duration timeout = const Duration(seconds: 25),
+  }) => _driveConcurrencyLimiter.run(() async {
+    try {
+      if (!RegExp(r'^[A-Za-z0-9_-]+$').hasMatch(fileId)) {
+        throw const FormatException('Invalid Drive file identity.');
+      }
+      final request = http.Request('GET', uri)
+        ..followRedirects = false
+        ..headers.addAll(headers)
+        ..headers['Accept-Encoding'] = 'identity';
+      if (prefixOnly) request.headers['Range'] = 'bytes=0-${maxBytes - 1}';
+      final response = await client.send(request).timeout(timeout);
+      if (response.statusCode != 200 &&
+              !(prefixOnly && response.statusCode == 206) ||
+          _isHtmlResponse(response.headers)) {
+        throw const FormatException('Invalid Drive metadata response.');
+      }
+      if (!prefixOnly &&
+          response.contentLength != null &&
+          response.contentLength! > maxBytes) {
+        throw const FormatException('Drive metadata download size limit.');
+      }
+      int? expectedBytes;
+      if (response.statusCode == 206) {
+        final range = RegExp(
+          r'^bytes 0-(\d+)/(\d+|\*)$',
+        ).firstMatch(response.headers['content-range'] ?? '');
+        final end = int.tryParse(range?.group(1) ?? '');
+        final total = int.tryParse(range?.group(2) ?? '');
+        if (end == null || end >= maxBytes || (total != null && total <= end)) {
+          throw const FormatException('Invalid Drive TXT range.');
+        }
+        expectedBytes = end + 1;
+      }
+      final bytes = BytesBuilder(copy: false);
+      final iterator = StreamIterator(response.stream);
+      try {
+        Future<void> readBytes() async {
+          while ((!prefixOnly || bytes.length < maxBytes) &&
+              await iterator.moveNext()) {
+            final chunk = iterator.current;
+            final remaining = maxBytes - bytes.length;
+            if (!prefixOnly && chunk.length > remaining) {
+              throw const FormatException(
+                'Drive metadata download size limit.',
+              );
+            }
+            if (expectedBytes != null &&
+                bytes.length + chunk.length > expectedBytes) {
+              throw const FormatException('Invalid Drive TXT range length.');
+            }
+            bytes.add(
+              chunk.length <= remaining ? chunk : chunk.sublist(0, remaining),
+            );
+          }
+        }
+
+        await readBytes().timeout(timeout);
+      } finally {
+        await iterator.cancel();
+      }
+      if (expectedBytes != null && bytes.length != expectedBytes ||
+          response.statusCode == 200 &&
+              response.contentLength != null &&
+              (!prefixOnly || bytes.length < maxBytes) &&
+              bytes.length != response.contentLength) {
+        throw const FormatException('Truncated Drive TXT response.');
+      }
+      final result = bytes.takeBytes();
+      if (_looksLikeHtml(result)) {
+        throw const FormatException('Drive returned HTML instead of TXT.');
+      }
+      return result;
+    } catch (_) {
+      // Never propagate an HTTP exception containing the key-bearing request URL.
+      throw const FormatException('Drive metadata could not be read.');
+    } finally {
+      client.close();
+    }
+  });
 
   static Future<File> downloadFileToFile(
     String fileId,

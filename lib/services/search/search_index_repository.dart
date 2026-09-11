@@ -1,5 +1,6 @@
 import 'package:sqflite/sqflite.dart';
 
+import '../../models/search_index_page.dart';
 import '../../models/search_index_state.dart';
 import '../../models/search_index_story.dart';
 import '../database/database_service.dart';
@@ -9,6 +10,8 @@ class SearchIndexRepository {
   SearchIndexRepository(this._databaseService);
 
   static const int maxUpsertBatchSize = 100;
+  static const int defaultSearchPageSize = 20;
+  static const int maxSearchPageSize = 100;
   static const int _queryParameterBatchSize = 400;
 
   final DatabaseService _databaseService;
@@ -169,12 +172,333 @@ class SearchIndexRepository {
     return _hydrateStory(database, rows.single);
   }
 
-  Future<int> countStories() async {
+  Future<int> countStories({String? sourceType, String? sourceId}) async {
     final database = await _databaseService.database;
+    return _countStories(database, sourceType: sourceType, sourceId: sourceId);
+  }
+
+  static Future<int> _countStories(
+    DatabaseExecutor database, {
+    String? sourceType,
+    String? sourceId,
+  }) async {
+    final type = _normalizeOptionalScopeValue(sourceType, 'sourceType');
+    final id = _normalizeOptionalScopeValue(sourceId, 'sourceId');
+    if (id != null && type == null) {
+      throw ArgumentError('sourceType is required when sourceId is provided.');
+    }
+    final clauses = [
+      if (type != null) 'source_type = ?',
+      if (id != null) 'source_id = ?',
+    ];
+    final where = clauses.isEmpty ? '' : ' WHERE ${clauses.join(' AND ')}';
     final rows = await database.rawQuery(
-      'SELECT COUNT(*) AS story_count FROM stories',
+      'SELECT COUNT(*) AS story_count FROM stories$where',
+      [?type, ?id],
     );
     return (rows.single['story_count'] as num).toInt();
+  }
+
+  Future<SearchIndexPage> searchByTitle(
+    String query, {
+    String? sourceType,
+    String? sourceId,
+    int limit = defaultSearchPageSize,
+    int offset = 0,
+  }) {
+    return _searchStories(
+      titleContains: _normalizeRequiredSearchValue(query, 'query'),
+      sourceType: sourceType,
+      sourceId: sourceId,
+      limit: limit,
+      offset: offset,
+    );
+  }
+
+  Future<SearchIndexPage> searchByAuthor(
+    String query, {
+    String? sourceType,
+    String? sourceId,
+    int limit = defaultSearchPageSize,
+    int offset = 0,
+  }) {
+    return _searchStories(
+      authorContains: _normalizeRequiredSearchValue(query, 'query'),
+      sourceType: sourceType,
+      sourceId: sourceId,
+      limit: limit,
+      offset: offset,
+    );
+  }
+
+  Future<SearchIndexPage> searchByGenre(
+    String genre, {
+    String? sourceType,
+    String? sourceId,
+    int limit = defaultSearchPageSize,
+    int offset = 0,
+  }) {
+    return _searchStories(
+      requiredGenres: [_normalizeRequiredSearchValue(genre, 'genre')],
+      sourceType: sourceType,
+      sourceId: sourceId,
+      limit: limit,
+      offset: offset,
+    );
+  }
+
+  Future<SearchIndexPage> searchCombined({
+    String query = '',
+    Iterable<String> authors = const [],
+    Iterable<String> genres = const [],
+    String? sourceType,
+    String? sourceId,
+    int limit = defaultSearchPageSize,
+    int offset = 0,
+  }) {
+    final normalizedTitle = SearchTextNormalizer.normalize(query);
+    return _searchStories(
+      titleContains: normalizedTitle.isEmpty ? null : normalizedTitle,
+      requiredAuthors: _normalizeRequiredFilters(authors, 'authors'),
+      requiredGenres: _normalizeRequiredFilters(genres, 'genres'),
+      sourceType: sourceType,
+      sourceId: sourceId,
+      limit: limit,
+      offset: offset,
+    );
+  }
+
+  Future<SearchIndexPage> searchByKeyword({
+    String query = '',
+    Iterable<String> authors = const [],
+    Iterable<String> genres = const [],
+    String? sourceType,
+    String? sourceId,
+    int limit = defaultSearchPageSize,
+    int offset = 0,
+  }) {
+    final normalizedKeyword = SearchTextNormalizer.normalize(query);
+    return _searchStories(
+      keywordContains: normalizedKeyword.isEmpty ? null : normalizedKeyword,
+      requiredAuthors: _normalizeRequiredFilters(authors, 'authors'),
+      anyGenres: _normalizeRequiredFilters(genres, 'genres'),
+      sourceType: sourceType,
+      sourceId: sourceId,
+      limit: limit,
+      offset: offset,
+    );
+  }
+
+  Future<List<String>> listAuthors({String? sourceType, String? sourceId}) {
+    return _listLabels(
+      table: 'authors',
+      relationTable: 'story_authors',
+      relationLabelColumn: 'author_id',
+      sourceType: sourceType,
+      sourceId: sourceId,
+    );
+  }
+
+  Future<List<String>> listGenres({String? sourceType, String? sourceId}) {
+    return _listLabels(
+      table: 'genres',
+      relationTable: 'story_genres',
+      relationLabelColumn: 'genre_id',
+      sourceType: sourceType,
+      sourceId: sourceId,
+    );
+  }
+
+  Future<SearchIndexPage> _searchStories({
+    String? titleContains,
+    String? authorContains,
+    String? keywordContains,
+    List<String> requiredAuthors = const [],
+    List<String> requiredGenres = const [],
+    List<String> anyGenres = const [],
+    String? sourceType,
+    String? sourceId,
+    required int limit,
+    required int offset,
+  }) async {
+    _validateSearchPagination(limit: limit, offset: offset);
+    final normalizedSourceType = _normalizeOptionalScopeValue(
+      sourceType,
+      'sourceType',
+    );
+    final normalizedSourceId = _normalizeOptionalScopeValue(
+      sourceId,
+      'sourceId',
+    );
+    if (normalizedSourceId != null && normalizedSourceType == null) {
+      throw ArgumentError('sourceType is required when sourceId is provided.');
+    }
+
+    final clauses = <String>[];
+    final arguments = <Object?>[];
+    if (normalizedSourceType != null) {
+      clauses.add('stories.source_type = ?');
+      arguments.add(normalizedSourceType);
+    }
+    if (normalizedSourceId != null) {
+      clauses.add('stories.source_id = ?');
+      arguments.add(normalizedSourceId);
+    }
+    if (titleContains != null) {
+      clauses.add("stories.normalized_title LIKE ? ESCAPE '!'");
+      arguments.add(_containsLikePattern(titleContains));
+    }
+    if (authorContains != null) {
+      clauses.add('''
+        EXISTS (
+          SELECT 1
+          FROM story_authors AS searched_story_authors
+          INNER JOIN authors AS searched_authors
+            ON searched_authors.id = searched_story_authors.author_id
+          WHERE searched_story_authors.story_id = stories.id
+            AND searched_authors.normalized_name LIKE ? ESCAPE '!'
+        )
+      ''');
+      arguments.add(_containsLikePattern(authorContains));
+    }
+    if (keywordContains != null) {
+      final pattern = _containsLikePattern(keywordContains);
+      clauses.add('''
+        (
+          stories.normalized_title LIKE ? ESCAPE '!'
+          OR EXISTS (
+            SELECT 1
+            FROM story_authors AS keyword_story_authors
+            INNER JOIN authors AS keyword_authors
+              ON keyword_authors.id = keyword_story_authors.author_id
+            WHERE keyword_story_authors.story_id = stories.id
+              AND keyword_authors.normalized_name LIKE ? ESCAPE '!'
+          )
+          OR EXISTS (
+            SELECT 1
+            FROM story_genres AS keyword_story_genres
+            INNER JOIN genres AS keyword_genres
+              ON keyword_genres.id = keyword_story_genres.genre_id
+            WHERE keyword_story_genres.story_id = stories.id
+              AND keyword_genres.normalized_name LIKE ? ESCAPE '!'
+          )
+        )
+      ''');
+      arguments.addAll([pattern, pattern, pattern]);
+    }
+    for (final author in requiredAuthors) {
+      clauses.add('''
+        EXISTS (
+          SELECT 1
+          FROM story_authors AS filtered_story_authors
+          INNER JOIN authors AS filtered_authors
+            ON filtered_authors.id = filtered_story_authors.author_id
+          WHERE filtered_story_authors.story_id = stories.id
+            AND filtered_authors.normalized_name = ?
+        )
+      ''');
+      arguments.add(author);
+    }
+    for (final genre in requiredGenres) {
+      clauses.add('''
+        EXISTS (
+          SELECT 1
+          FROM story_genres AS filtered_story_genres
+          INNER JOIN genres AS filtered_genres
+            ON filtered_genres.id = filtered_story_genres.genre_id
+          WHERE filtered_story_genres.story_id = stories.id
+            AND filtered_genres.normalized_name = ?
+        )
+      ''');
+      arguments.add(genre);
+    }
+    if (anyGenres.isNotEmpty) {
+      final placeholders = List.filled(anyGenres.length, '?').join(', ');
+      clauses.add('''
+        EXISTS (
+          SELECT 1
+          FROM story_genres AS selected_story_genres
+          INNER JOIN genres AS selected_genres
+            ON selected_genres.id = selected_story_genres.genre_id
+          WHERE selected_story_genres.story_id = stories.id
+            AND selected_genres.normalized_name IN ($placeholders)
+        )
+      ''');
+      arguments.addAll(anyGenres);
+    }
+
+    final query = StringBuffer('SELECT stories.* FROM stories');
+    if (clauses.isNotEmpty) {
+      query.write(' WHERE ${clauses.join(' AND ')}');
+    }
+    query.write(
+      ' ORDER BY stories.normalized_title, stories.source_type, '
+      'stories.source_id, stories.remote_id, stories.id LIMIT ? OFFSET ?',
+    );
+    arguments
+      ..add(limit + 1)
+      ..add(offset);
+
+    final database = await _databaseService.database;
+    return database.transaction((transaction) async {
+      final rows = await transaction.rawQuery(query.toString(), arguments);
+      final hasMore = rows.length > limit;
+      final pageRows = rows.take(limit).toList(growable: false);
+      return SearchIndexPage(
+        items: await _hydrateStories(transaction, pageRows),
+        limit: limit,
+        offset: offset,
+        hasMore: hasMore,
+      );
+    });
+  }
+
+  Future<List<String>> _listLabels({
+    required String table,
+    required String relationTable,
+    required String relationLabelColumn,
+    String? sourceType,
+    String? sourceId,
+  }) async {
+    final normalizedSourceType = _normalizeOptionalScopeValue(
+      sourceType,
+      'sourceType',
+    );
+    final normalizedSourceId = _normalizeOptionalScopeValue(
+      sourceId,
+      'sourceId',
+    );
+    if (normalizedSourceId != null && normalizedSourceType == null) {
+      throw ArgumentError('sourceType is required when sourceId is provided.');
+    }
+
+    final sourceClauses = <String>[];
+    final arguments = <Object?>[];
+    if (normalizedSourceType != null) {
+      sourceClauses.add('stories.source_type = ?');
+      arguments.add(normalizedSourceType);
+    }
+    if (normalizedSourceId != null) {
+      sourceClauses.add('stories.source_id = ?');
+      arguments.add(normalizedSourceId);
+    }
+    final scopedWhere = sourceClauses.isEmpty
+        ? ''
+        : ' AND ${sourceClauses.join(' AND ')}';
+
+    final database = await _databaseService.database;
+    final rows = await database.rawQuery(
+      'SELECT labels.name '
+      'FROM $table AS labels '
+      'WHERE EXISTS ('
+      'SELECT 1 FROM $relationTable AS relations '
+      'INNER JOIN stories ON stories.id = relations.story_id '
+      'WHERE relations.$relationLabelColumn = labels.id$scopedWhere'
+      ') '
+      'ORDER BY labels.normalized_name, labels.id',
+      arguments,
+    );
+    return [for (final row in rows) row['name'] as String];
   }
 
   Future<Map<String, SearchIndexStory>> loadStoriesForSource({
@@ -376,6 +700,18 @@ class SearchIndexRepository {
     required String sourceId,
   }) async {
     final database = await _databaseService.database;
+    return _latestIndexRun(
+      database,
+      sourceType: sourceType,
+      sourceId: sourceId,
+    );
+  }
+
+  static Future<SearchIndexRunRecord?> _latestIndexRun(
+    DatabaseExecutor database, {
+    required String sourceType,
+    required String sourceId,
+  }) async {
     final rows = await database.query(
       'index_runs',
       where: 'source_type = ? AND source_id = ?',
@@ -408,24 +744,39 @@ class SearchIndexRepository {
     required String sourceType,
     required String sourceId,
   }) async {
-    final run = await latestIndexRun(
-      sourceType: sourceType,
-      sourceId: sourceId,
-    );
-    if (run == null) return const SearchIndexState.notStarted();
-
-    return SearchIndexState(
-      status: switch (run.status) {
-        SearchIndexRunStatus.indexing => SearchIndexStatus.indexing,
-        SearchIndexRunStatus.ready => SearchIndexStatus.ready,
-        SearchIndexRunStatus.partial => SearchIndexStatus.partial,
-        SearchIndexRunStatus.error => SearchIndexStatus.error,
-      },
-      indexedCount: run.indexedCount,
-      totalCount: run.totalCount,
-      lastIndexedAt: run.completedAt ?? run.startedAt,
-      errorCode: run.errorCode,
-    );
+    final database = await _databaseService.database;
+    return database.transaction((transaction) async {
+      final run = await _latestIndexRun(
+        transaction,
+        sourceType: sourceType,
+        sourceId: sourceId,
+      );
+      if (run == null) return const SearchIndexState.notStarted();
+      // Run counters describe processed records, not necessarily the rows
+      // retained after an interrupted/failed synchronization. Read one snapshot.
+      final available = await _countStories(
+        transaction,
+        sourceType: sourceType,
+        sourceId: sourceId,
+      );
+      final total = run.totalCount;
+      return SearchIndexState(
+        status: switch (run.status) {
+          SearchIndexRunStatus.indexing => SearchIndexStatus.indexing,
+          SearchIndexRunStatus.ready => SearchIndexStatus.ready,
+          SearchIndexRunStatus.partial => SearchIndexStatus.partial,
+          SearchIndexRunStatus.error => SearchIndexStatus.error,
+        },
+        indexedCount: available,
+        totalCount:
+            run.errorCode == 'traversal_incomplete' ||
+                total != null && available > total
+            ? null
+            : total,
+        lastIndexedAt: run.completedAt ?? run.startedAt,
+        errorCode: run.errorCode,
+      );
+    });
   }
 
   Future<void> upsertIndexJobs(
@@ -628,6 +979,43 @@ class SearchIndexRepository {
     );
   }
 
+  static Future<List<SearchIndexStory>> _hydrateStories(
+    DatabaseExecutor database,
+    List<Map<String, Object?>> rows,
+  ) async {
+    if (rows.isEmpty) return const [];
+
+    final storyIds = [for (final row in rows) (row['id'] as num).toInt()];
+    final placeholders = List.filled(storyIds.length, '?').join(', ');
+    final authorRows = await database.rawQuery(
+      'SELECT story_authors.story_id, story_authors.position, authors.name '
+      'FROM story_authors '
+      'INNER JOIN authors ON authors.id = story_authors.author_id '
+      'WHERE story_authors.story_id IN ($placeholders) '
+      'ORDER BY story_authors.story_id, story_authors.position',
+      storyIds,
+    );
+    final genreRows = await database.rawQuery(
+      'SELECT story_genres.story_id, story_genres.position, genres.name '
+      'FROM story_genres '
+      'INNER JOIN genres ON genres.id = story_genres.genre_id '
+      'WHERE story_genres.story_id IN ($placeholders) '
+      'ORDER BY story_genres.story_id, story_genres.position',
+      storyIds,
+    );
+    final authorsByStory = _groupRelationNames(authorRows);
+    final genresByStory = _groupRelationNames(genreRows);
+
+    return [
+      for (final row in rows)
+        _storyFromDatabaseRow(
+          row,
+          authors: authorsByStory[(row['id'] as num).toInt()] ?? const [],
+          genres: genresByStory[(row['id'] as num).toInt()] ?? const [],
+        ),
+    ];
+  }
+
   static Map<int, List<String>> _groupRelationNames(
     Iterable<Map<String, Object?>> rows,
   ) {
@@ -682,6 +1070,54 @@ class SearchIndexRepository {
   static String? _trimToNull(String? value) {
     final trimmed = value?.trim();
     return trimmed == null || trimmed.isEmpty ? null : trimmed;
+  }
+
+  static String _normalizeRequiredSearchValue(String value, String name) {
+    final normalized = SearchTextNormalizer.normalize(value);
+    if (normalized.isEmpty) {
+      throw ArgumentError.value(value, name, 'Search value cannot be empty.');
+    }
+    return normalized;
+  }
+
+  static List<String> _normalizeRequiredFilters(
+    Iterable<String> values,
+    String name,
+  ) {
+    final normalizedValues = <String>{};
+    for (final value in values) {
+      normalizedValues.add(_normalizeRequiredSearchValue(value, name));
+    }
+    return normalizedValues.toList(growable: false);
+  }
+
+  static String? _normalizeOptionalScopeValue(String? value, String name) {
+    if (value == null) return null;
+    final normalized = value.trim();
+    if (normalized.isEmpty) {
+      throw ArgumentError.value(value, name, 'Source scope cannot be empty.');
+    }
+    return normalized;
+  }
+
+  static String _containsLikePattern(String value) {
+    final escaped = value
+        .replaceAll('!', '!!')
+        .replaceAll('%', '!%')
+        .replaceAll('_', '!_');
+    return '%$escaped%';
+  }
+
+  static void _validateSearchPagination({
+    required int limit,
+    required int offset,
+  }) {
+    if (limit < 1 || limit > maxSearchPageSize) {
+      throw RangeError.range(limit, 1, maxSearchPageSize, 'limit');
+    }
+    if (offset < 0) {
+      throw RangeError.value(offset, 'offset', 'Offset cannot be negative.');
+    }
   }
 
   static void _validateRunValues({

@@ -257,6 +257,312 @@ void main() {
   });
 
   test(
+    'title search folds Vietnamese text and treats LIKE symbols literally',
+    () async {
+      await repository.upsertStories([
+        _story(
+          remoteId: 'literal-symbols',
+          driveFileId: 'drive-symbols',
+          title: 'Tiên Hiệp 100%_Ready!',
+        ),
+        _story(
+          remoteId: 'plain-text',
+          driveFileId: 'drive-plain',
+          title: 'Tiên Hiệp 100 percent ready',
+        ),
+      ]);
+
+      final normalized = await repository.searchByTitle('tien hiep');
+      final literalSymbols = await repository.searchByTitle('%_');
+      final injectionAttempt = await repository.searchByTitle(
+        "missing' OR 1=1 --",
+      );
+
+      expect(normalized.items.map((story) => story.remoteId), {
+        'literal-symbols',
+        'plain-text',
+      });
+      expect(literalSymbols.items.map((story) => story.remoteId), [
+        'literal-symbols',
+      ]);
+      expect(injectionAttempt.items, isEmpty);
+    },
+  );
+
+  test('author search queries normalized relation rows in SQL', () async {
+    await repository.upsertStories([
+      _story(
+        remoteId: 'mat-biec',
+        title: 'Mắt Biếc',
+        authors: const ['Nguyễn Nhật Ánh'],
+      ),
+      _story(
+        remoteId: 'canh-dong',
+        title: 'Cánh Đồng Bất Tận',
+        authors: const ['Nguyễn Ngọc Tư'],
+      ),
+    ]);
+
+    final result = await repository.searchByAuthor('nhat anh');
+
+    expect(result.items.map((story) => story.remoteId), ['mat-biec']);
+    expect(result.items.single.authors, const ['Nguyễn Nhật Ánh']);
+  });
+
+  test('genre search uses an exact normalized genre filter', () async {
+    await repository.upsertStories([
+      _story(
+        remoteId: 'cultivation',
+        title: 'Tu Tiên',
+        genres: const ['Tiên Hiệp'],
+      ),
+      _story(
+        remoteId: 'comedy',
+        title: 'Tu Tiên Hài',
+        genres: const ['Tiên Hiệp Hài'],
+      ),
+    ]);
+
+    final result = await repository.searchByGenre('tien hiep');
+
+    expect(result.items.map((story) => story.remoteId), ['cultivation']);
+  });
+
+  test('keyword search matches title, author, or genre in SQLite', () async {
+    await repository.upsertStories([
+      _story(remoteId: 'title', title: 'Dòng Sông Ký Ức'),
+      _story(
+        remoteId: 'author',
+        title: 'Nỗi Buồn Chiến Tranh',
+        authors: const ['Bảo Ninh'],
+      ),
+      _story(
+        remoteId: 'genre',
+        title: 'Biên Niên Sử',
+        genres: const ['Lịch Sử'],
+      ),
+    ]);
+
+    final byTitle = await repository.searchByKeyword(query: 'dong song');
+    final byAuthor = await repository.searchByKeyword(query: 'bao ninh');
+    final byGenre = await repository.searchByKeyword(query: 'lich su');
+
+    expect(byTitle.items.map((story) => story.remoteId), ['title']);
+    expect(byAuthor.items.map((story) => story.remoteId), ['author']);
+    expect(byGenre.items.map((story) => story.remoteId), ['genre']);
+  });
+
+  test('keyword search treats selected genres as an OR filter', () async {
+    await repository.upsertStories([
+      _story(
+        remoteId: 'fantasy',
+        title: 'Fantasy story',
+        genres: const ['Kỳ Ảo'],
+      ),
+      _story(
+        remoteId: 'children',
+        title: 'Children story',
+        genres: const ['Thiếu Nhi'],
+      ),
+      _story(
+        remoteId: 'history',
+        title: 'History story',
+        genres: const ['Lịch Sử'],
+      ),
+    ]);
+
+    final result = await repository.searchByKeyword(
+      genres: const ['ky ao', 'thiếu nhi'],
+    );
+
+    expect(result.items.map((story) => story.remoteId).toSet(), {
+      'fantasy',
+      'children',
+    });
+  });
+
+  test('author and genre facets are distinct and source scoped', () async {
+    await repository.upsertStories([
+      _story(
+        remoteId: 'drive-a',
+        title: 'Drive A',
+        authors: const ['Nguyễn Nhật Ánh'],
+        genres: const ['Thiếu Nhi'],
+      ),
+      _story(
+        remoteId: 'drive-b',
+        title: 'Drive B',
+        authors: const ['Nguyễn Nhật Ánh', 'Tô Hoài'],
+        genres: const ['Thiếu Nhi', 'Phiêu Lưu'],
+      ),
+      _story(
+        sourceType: 'extension',
+        sourceId: 'extension-a',
+        remoteId: 'extension-story',
+        title: 'Extension story',
+        authors: const ['Extension Author'],
+        genres: const ['Extension Genre'],
+      ),
+    ]);
+
+    final authors = await repository.listAuthors(sourceType: 'googleDrive');
+    final genres = await repository.listGenres(sourceType: 'googleDrive');
+
+    expect(authors, ['Nguyễn Nhật Ánh', 'Tô Hoài']);
+    expect(genres, ['Phiêu Lưu', 'Thiếu Nhi']);
+  });
+
+  test(
+    'combined search requires every selected label and respects source scope',
+    () async {
+      await repository.upsertStories([
+        _story(
+          sourceId: 'drive-root',
+          remoteId: 'target',
+          driveFileId: 'drive-target',
+          title: 'Hành Trình Phương Nam',
+          authors: const ['Nguyễn Văn A', 'Trần Văn B'],
+          genres: const ['Kỳ Ảo', 'Phiêu Lưu'],
+        ),
+        _story(
+          sourceId: 'drive-root',
+          remoteId: 'missing-genre',
+          driveFileId: 'drive-missing-genre',
+          title: 'Hành Trình Phương Bắc',
+          authors: const ['Nguyễn Văn A', 'Trần Văn B'],
+          genres: const ['Phiêu Lưu'],
+        ),
+        _story(
+          sourceId: 'another-root',
+          remoteId: 'other-source',
+          driveFileId: 'drive-other-source',
+          title: 'Hành Trình Phương Nam',
+          authors: const ['Nguyễn Văn A', 'Trần Văn B'],
+          genres: const ['Kỳ Ảo', 'Phiêu Lưu'],
+        ),
+      ]);
+
+      final result = await repository.searchCombined(
+        query: 'hanh trinh',
+        authors: const ['nguyen van a', 'Trần Văn B'],
+        genres: const ['ky ao', 'Phiêu Lưu'],
+        sourceType: 'googleDrive',
+        sourceId: 'drive-root',
+      );
+
+      expect(result.items.map((story) => story.remoteId), ['target']);
+      await expectLater(
+        repository.searchCombined(sourceId: 'drive-root'),
+        throwsArgumentError,
+      );
+    },
+  );
+
+  test('search pagination is stable and exposes the next offset', () async {
+    await repository.upsertStories([
+      for (var index = 1; index <= 23; index++)
+        _story(
+          remoteId: 'series-$index',
+          driveFileId: 'series-drive-$index',
+          title: 'Series ${index.toString().padLeft(2, '0')}',
+        ),
+    ]);
+
+    final first = await repository.searchByTitle('series', limit: 10);
+    final second = await repository.searchByTitle(
+      'series',
+      limit: 10,
+      offset: first.nextOffset!,
+    );
+    final third = await repository.searchByTitle(
+      'series',
+      limit: 10,
+      offset: second.nextOffset!,
+    );
+
+    expect(first.items.length, 10);
+    expect(first.hasMore, isTrue);
+    expect(first.nextOffset, 10);
+    expect(second.items.length, 10);
+    expect(second.hasMore, isTrue);
+    expect(second.nextOffset, 20);
+    expect(third.items.length, 3);
+    expect(third.hasMore, isFalse);
+    expect(third.nextOffset, isNull);
+    expect(
+      [
+        ...first.items,
+        ...second.items,
+        ...third.items,
+      ].map((story) => story.remoteId).toSet().length,
+      23,
+    );
+  });
+
+  test('search finds item 400 after a 500-record index', () async {
+    final stories = [
+      for (var index = 1; index <= 500; index++)
+        _story(
+          remoteId: 'story-$index',
+          driveFileId: 'large-drive-$index',
+          title: index == 400
+              ? 'Kho Báu Bí Mật'
+              : 'Story ${index.toString().padLeft(3, '0')}',
+        ),
+    ];
+    for (
+      var start = 0;
+      start < stories.length;
+      start += SearchIndexRepository.maxUpsertBatchSize
+    ) {
+      await repository.upsertStories(
+        stories.skip(start).take(SearchIndexRepository.maxUpsertBatchSize),
+      );
+    }
+
+    final result = await repository.searchByTitle(
+      'kho bau bi mat',
+      sourceType: 'googleDrive',
+      sourceId: 'drive-root',
+      limit: 15,
+    );
+
+    expect(await repository.countStories(), 500);
+    expect(result.items.map((story) => story.remoteId), ['story-400']);
+  });
+
+  test(
+    'indexed results remain searchable while index state is partial',
+    () async {
+      await repository.startIndexRun(
+        SearchIndexRunRecord(
+          runId: 'running-search',
+          sourceType: 'googleDrive',
+          sourceId: 'drive-root',
+          status: SearchIndexRunStatus.indexing,
+          indexedCount: 1,
+          totalCount: 500,
+          startedAt: DateTime.utc(2026, 9, 3),
+        ),
+      );
+      await repository.upsertStories([
+        _story(remoteId: 'indexed', title: 'Already Indexed'),
+      ]);
+
+      final result = await repository.searchByTitle('already indexed');
+      final state = await repository.readIndexState(
+        sourceType: 'googleDrive',
+        sourceId: 'drive-root',
+      );
+
+      expect(result.items.map((story) => story.remoteId), ['indexed']);
+      expect(state.status, SearchIndexStatus.indexing);
+      expect(state.indexedCount, 1);
+      expect(state.totalCount, 500);
+    },
+  );
+
+  test(
     'schema and metadata survive closing and reopening the database',
     () async {
       await repository.upsertStories([

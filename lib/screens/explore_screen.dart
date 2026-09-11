@@ -2,10 +2,15 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import '../models/search_index_state.dart';
+import '../models/search_index_story.dart';
 import '../models/story.dart';
 import '../services/api_service.dart';
 import '../services/extension_service.dart';
 import '../models/plugin_info.dart';
+import '../services/search/drive_search_coordinator.dart';
+import '../services/search/unified_search_gateway.dart';
+import 'unified_search_screen.dart';
 import '../theme/user_provider.dart';
 import '../widgets/app_state_widgets.dart';
 import '../widgets/story_cover_image.dart';
@@ -24,11 +29,15 @@ class ExploreScreen extends StatefulWidget {
   })?
   drivePageLoader;
   final Future<List<PluginInfo>> Function()? installedPluginsLoader;
+  final DriveSearchGateway? driveSearchGateway;
+  final Future<List<String>> Function()? driveFolderInputsLoader;
 
   const ExploreScreen({
     super.key,
     this.drivePageLoader,
     this.installedPluginsLoader,
+    this.driveSearchGateway,
+    this.driveFolderInputsLoader,
   });
 
   @override
@@ -37,6 +46,8 @@ class ExploreScreen extends StatefulWidget {
 
 class _ExploreScreenState extends State<ExploreScreen> {
   static const int _drivePageSize = 15;
+  static const int _searchPageSize = 30;
+  static const Duration _searchDebounce = Duration(milliseconds: 300);
 
   List<Story> _serverStories = [];
   final Set<String> _seenStoryIds = {};
@@ -55,18 +66,42 @@ class _ExploreScreenState extends State<ExploreScreen> {
 
   String _searchQuery = '';
   final TextEditingController _searchController = TextEditingController();
+  Timer? _searchDebounceTimer;
+  Timer? _indexRefreshTimer;
+  bool _indexRefreshResults = false;
+  int _searchGeneration = 0;
+  List<Story> _indexedSearchStories = [];
+  bool _isSearchLoading = false;
+  bool _isSearchLoadingMore = false;
+  bool _searchHasMore = false;
+  Object? _searchError;
+
+  late final DriveSearchGateway _driveSearchGateway;
+  late DriveSearchIndexState _driveIndexState;
+  Future<List<String>>? _driveFolderInputsFuture;
+  int _facetLoadGeneration = 0;
 
   List<String> _allGenres = ['Tất cả'];
   final Set<String> _selectedGenres = {};
+  List<String> _allAuthors = [];
+  String? _selectedAuthor;
 
   @override
   void initState() {
     super.initState();
+    _driveSearchGateway =
+        widget.driveSearchGateway ?? DriveSearchCoordinator.instance;
+    _driveIndexState = _driveSearchGateway.state;
+    _driveSearchGateway.addListener(_handleDriveIndexStateChanged);
     _loadServerStories();
+    unawaited(_initializeDriveSearch());
   }
 
   @override
   void dispose() {
+    _searchDebounceTimer?.cancel();
+    _indexRefreshTimer?.cancel();
+    _driveSearchGateway.removeListener(_handleDriveIndexStateChanged);
     _searchController.dispose();
     super.dispose();
   }
@@ -74,20 +109,334 @@ class _ExploreScreenState extends State<ExploreScreen> {
   Future<DrivePage<Story>> _fetchDrivePage({
     required int pageSize,
     String? pageToken,
-  }) {
+  }) async {
     final loader = widget.drivePageLoader;
     if (loader != null) {
       return loader(pageSize: pageSize, pageToken: pageToken);
     }
+    final folderInputs = await _resolveDriveFolderInputs();
     return GoogleDriveService.fetchStoriesPage(
       pageSize: pageSize,
       pageToken: pageToken,
+      extraFolderUrls: folderInputs,
     );
+  }
+
+  Future<List<String>> _resolveDriveFolderInputs() {
+    final cached = _driveFolderInputsFuture;
+    if (cached != null) return cached;
+
+    final configuredLoader = widget.driveFolderInputsLoader;
+    final future = configuredLoader != null
+        ? configuredLoader()
+        : ApiService.getSavedDriveStoryFolderInputs().then(
+            (savedInputs) => GoogleDriveService.configuredFolderInputs(
+              extraFolderUrls: savedInputs,
+            ),
+          );
+    _driveFolderInputsFuture = future;
+    return future;
   }
 
   Future<List<PluginInfo>> _loadInstalledPlugins() {
     return widget.installedPluginsLoader?.call() ??
         ExtensionService.getInstalledPlugins();
+  }
+
+  Future<void> _initializeDriveSearch() async {
+    try {
+      final folderInputs = await _resolveDriveFolderInputs();
+      await _driveSearchGateway.restoreState(folderInputs);
+      if (mounted) {
+        await _loadSearchFacets();
+      }
+      unawaited(_synchronizeDriveSearch());
+    } catch (_) {
+      _setDriveIndexFailure('index_initialization_failed');
+    }
+  }
+
+  Future<void> _synchronizeDriveSearch({
+    bool force = false,
+    bool reloadFolderInputs = false,
+    bool retryFailedExtractions = false,
+  }) async {
+    try {
+      if (reloadFolderInputs) {
+        _driveFolderInputsFuture = null;
+      }
+      final folderInputs = await _resolveDriveFolderInputs();
+      await _driveSearchGateway.synchronize(
+        folderInputs,
+        force: force,
+        retryFailedExtractions: retryFailedExtractions,
+      );
+    } catch (_) {
+      _setDriveIndexFailure('index_sync_failed');
+    }
+  }
+
+  void _setDriveIndexFailure(String errorCode) {
+    if (!mounted) return;
+    setState(() {
+      _driveIndexState = DriveSearchIndexState(
+        status: SearchIndexStatus.error,
+        indexedCount: _driveIndexState.indexedCount,
+        totalCount: _driveIndexState.totalCount,
+        completedSources: _driveIndexState.completedSources,
+        totalSources: _driveIndexState.totalSources,
+        lastIndexedAt: _driveIndexState.lastIndexedAt,
+        dataRevision: _driveIndexState.dataRevision,
+        errorCode: errorCode,
+      );
+    });
+  }
+
+  void _handleDriveIndexStateChanged() {
+    if (!mounted) return;
+    final previous = _driveIndexState;
+    final next = _driveSearchGateway.state;
+    final searchableDataChanged =
+        previous.dataRevision != next.dataRevision ||
+        previous.indexedCount != next.indexedCount ||
+        previous.completedSources != next.completedSources ||
+        previous.status != next.status;
+    final shouldRefreshResults =
+        previous.dataRevision != next.dataRevision ||
+        previous.indexedCount != next.indexedCount ||
+        previous.completedSources != next.completedSources ||
+        (previous.status == SearchIndexStatus.indexing &&
+            next.status != SearchIndexStatus.indexing);
+    setState(() => _driveIndexState = next);
+
+    if (searchableDataChanged) {
+      _indexRefreshResults = _indexRefreshResults || shouldRefreshResults;
+      _indexRefreshTimer ??= Timer(const Duration(milliseconds: 250), () {
+        _indexRefreshTimer = null;
+        if (!mounted) return;
+        final refreshResults = _indexRefreshResults;
+        _indexRefreshResults = false;
+        unawaited(_loadSearchFacets());
+        if (_hasActiveSearchFilters && refreshResults) {
+          _scheduleIndexedSearch(debounce: false, preserveResults: true);
+        }
+      });
+    }
+  }
+
+  Future<void> _loadSearchFacets() async {
+    final generation = ++_facetLoadGeneration;
+    try {
+      final authorsFuture = _driveSearchGateway.loadAuthors();
+      final genresFuture = _driveSearchGateway.loadGenres();
+      final authors = await authorsFuture;
+      final genres = await genresFuture;
+      if (!mounted || generation != _facetLoadGeneration) return;
+
+      var filtersChanged = false;
+      setState(() {
+        if (_driveIndexState.status == SearchIndexStatus.ready) {
+          if (_selectedAuthor != null && !authors.contains(_selectedAuthor)) {
+            _selectedAuthor = null;
+            filtersChanged = true;
+          }
+          final previousGenreCount = _selectedGenres.length;
+          _selectedGenres.removeWhere((genre) => !genres.contains(genre));
+          filtersChanged =
+              filtersChanged || previousGenreCount != _selectedGenres.length;
+        }
+        _allAuthors = <String>{
+          ...authors,
+          ?_selectedAuthor,
+        }.toList(growable: false);
+        _allGenres = [
+          'Tất cả',
+          ...genres,
+          if (_driveIndexState.status != SearchIndexStatus.ready)
+            ..._selectedGenres.where((genre) => !genres.contains(genre)),
+        ];
+      });
+      if (filtersChanged) {
+        _scheduleIndexedSearch(debounce: false);
+      }
+    } catch (_) {
+      // Existing indexed results remain usable even if facet loading fails.
+    }
+  }
+
+  bool get _hasActiveSearchFilters =>
+      _searchQuery.trim().isNotEmpty ||
+      _selectedAuthor != null ||
+      _selectedGenres.isNotEmpty;
+
+  void _updateSearchQuery(String value) {
+    setState(() => _searchQuery = value);
+    _scheduleIndexedSearch();
+  }
+
+  void _selectAuthor(String? author) {
+    setState(() => _selectedAuthor = author);
+    _scheduleIndexedSearch(debounce: false);
+  }
+
+  void _scheduleIndexedSearch({
+    bool debounce = true,
+    bool preserveResults = false,
+  }) {
+    _searchDebounceTimer?.cancel();
+    final generation = ++_searchGeneration;
+
+    if (!_hasActiveSearchFilters) {
+      setState(() {
+        _indexedSearchStories = [];
+        _isSearchLoading = false;
+        _isSearchLoadingMore = false;
+        _searchHasMore = false;
+        _searchError = null;
+      });
+      return;
+    }
+
+    final query = _searchQuery;
+    final authors = _selectedAuthor == null
+        ? const <String>[]
+        : <String>[_selectedAuthor!];
+    final genres = _selectedGenres.toList(growable: false);
+    setState(() {
+      if (!preserveResults) {
+        _indexedSearchStories = [];
+      }
+      _isSearchLoading = true;
+      _isSearchLoadingMore = false;
+      _searchHasMore = false;
+      _searchError = null;
+    });
+
+    void run() {
+      unawaited(
+        _performIndexedSearch(
+          generation: generation,
+          query: query,
+          authors: authors,
+          genres: genres,
+          offset: 0,
+          append: false,
+        ),
+      );
+    }
+
+    if (debounce) {
+      _searchDebounceTimer = Timer(_searchDebounce, run);
+    } else {
+      run();
+    }
+  }
+
+  void _loadNextSearchPage() {
+    if (!_hasActiveSearchFilters ||
+        _isSearchLoading ||
+        _isSearchLoadingMore ||
+        !_searchHasMore) {
+      return;
+    }
+
+    final generation = _searchGeneration;
+    final query = _searchQuery;
+    final authors = _selectedAuthor == null
+        ? const <String>[]
+        : <String>[_selectedAuthor!];
+    final genres = _selectedGenres.toList(growable: false);
+    setState(() {
+      _isSearchLoadingMore = true;
+      _searchError = null;
+    });
+    unawaited(
+      _performIndexedSearch(
+        generation: generation,
+        query: query,
+        authors: authors,
+        genres: genres,
+        offset: _indexedSearchStories.length,
+        append: true,
+      ),
+    );
+  }
+
+  Future<void> _performIndexedSearch({
+    required int generation,
+    required String query,
+    required List<String> authors,
+    required List<String> genres,
+    required int offset,
+    required bool append,
+  }) async {
+    try {
+      final page = await _driveSearchGateway.search(
+        query: query,
+        authors: authors,
+        genres: genres,
+        limit: _searchPageSize,
+        offset: offset,
+      );
+      if (!mounted || generation != _searchGeneration) return;
+      final stories = page.items.map(_storyFromSearchIndex).toList();
+      setState(() {
+        _indexedSearchStories = append
+            ? [..._indexedSearchStories, ...stories]
+            : stories;
+        _searchHasMore = page.hasMore;
+        _searchError = null;
+      });
+    } catch (error) {
+      if (!mounted || generation != _searchGeneration) return;
+      setState(() {
+        _searchError = error;
+        if (!append) {
+          _indexedSearchStories = [];
+          _searchHasMore = false;
+        }
+      });
+    } finally {
+      if (mounted && generation == _searchGeneration) {
+        setState(() {
+          _isSearchLoading = false;
+          _isSearchLoadingMore = false;
+        });
+      }
+    }
+  }
+
+  Story _storyFromSearchIndex(SearchIndexStory indexed) {
+    final coverLocalPath = indexed.coverLocalPath?.trim() ?? '';
+    final coverUrl = indexed.coverUrl?.trim() ?? '';
+    final coverFileId = indexed.coverFileId?.trim() ?? '';
+    final iconUrl = coverLocalPath.isNotEmpty
+        ? coverLocalPath
+        : coverUrl.isNotEmpty
+        ? coverUrl
+        : coverFileId.isNotEmpty
+        ? GoogleDriveService.getCoverImageUrl(coverFileId)
+        : '';
+
+    return Story(
+      id: indexed.remoteId,
+      title: indexed.title,
+      description: indexed.description,
+      author: indexed.authors.join(', '),
+      genres: indexed.genres,
+      iconUrl: iconUrl,
+      driveFileId: indexed.driveFileId ?? indexed.remoteId,
+      isFromDrive: true,
+      fileType: _fileTypeFromMimeType(indexed.mimeType),
+    );
+  }
+
+  String _fileTypeFromMimeType(String mimeType) {
+    final normalized = mimeType.trim().toLowerCase();
+    if (normalized.contains('epub')) return 'epub';
+    if (normalized.contains('pdf')) return 'pdf';
+    if (normalized.startsWith('text/')) return 'txt';
+    return '';
   }
 
   Future<void> _loadServerStories() {
@@ -136,7 +485,6 @@ class _ExploreScreenState extends State<ExploreScreen> {
       }
       _nextPageToken = drivePage.nextPageToken;
       _hasMore = drivePage.hasMore;
-      _buildGenreList();
       stopwatch.stop();
       AppPerformanceLogger.log(
         '[PERF][EXPLORE] Initial page complete: count=${_serverStories.length}, duration=${stopwatch.elapsedMilliseconds}ms, hasMore=$_hasMore',
@@ -144,8 +492,6 @@ class _ExploreScreenState extends State<ExploreScreen> {
     } catch (e) {
       if (!mounted || generation != _driveLoadGeneration) return;
       _serverStories = [];
-      _allGenres = ['Tất cả'];
-      _selectedGenres.clear();
       _loadError = _formatLoadError(e);
     }
     if (!mounted || generation != _driveLoadGeneration) return;
@@ -186,7 +532,6 @@ class _ExploreScreenState extends State<ExploreScreen> {
       }
       _nextPageToken = drivePage.nextPageToken;
       _hasMore = drivePage.hasMore;
-      _buildGenreList();
       stopwatch.stop();
       AppPerformanceLogger.log(
         '[PERF][EXPLORE] Next page complete: added=$addedCount, total=${_serverStories.length}, duration=${stopwatch.elapsedMilliseconds}ms, hasMore=$_hasMore',
@@ -209,6 +554,7 @@ class _ExploreScreenState extends State<ExploreScreen> {
       AppPerformanceLogger.log('[PERF][EXPLORE] Refresh request coalesced');
       return;
     }
+    unawaited(_synchronizeDriveSearch(force: true));
     AppPerformanceLogger.log('[PERF][EXPLORE] Refresh page start');
     final refresh = _loadServerStories();
     final generation = _driveLoadGeneration;
@@ -234,48 +580,15 @@ class _ExploreScreenState extends State<ExploreScreen> {
     return message;
   }
 
-  void _buildGenreList() {
-    final genreSet = <String>{};
-    for (final story in _serverStories) {
-      for (final genre in story.genres) {
-        final trimmed = genre.trim();
-        if (trimmed.isNotEmpty) genreSet.add(trimmed);
-      }
-    }
-    final sorted = genreSet.toList()..sort();
-    _allGenres = ['Tất cả', ...sorted];
-    _selectedGenres.removeWhere((genre) => !genreSet.contains(genre));
-  }
-
-  List<Story> get _displayStories {
-    final selectedKeys = _selectedGenres.map(_genreKey).toSet();
-    return _serverStories.where((s) {
-      final storyGenreKeys = s.genres.map(_genreKey).toSet();
-      final genreMatch =
-          selectedKeys.isEmpty ||
-          storyGenreKeys.any((genre) => selectedKeys.contains(genre));
-
-      final q = _searchQuery.trim().toLowerCase();
-      final searchText = [
-        s.title,
-        s.author,
-        s.description,
-        s.fileType,
-        ...s.genres,
-      ].join(' ').toLowerCase();
-      final textMatch = q.isEmpty || searchText.contains(q);
-
-      return genreMatch && textMatch;
-    }).toList();
-  }
-
-  String _genreKey(String value) => value.trim().toLowerCase();
+  List<Story> get _displayStories =>
+      _hasActiveSearchFilters ? _indexedSearchStories : _serverStories;
 
   void _toggleGenre(String genre) {
     if (genre == _allGenres.first) {
       setState(() {
         _selectedGenres.clear();
       });
+      _scheduleIndexedSearch(debounce: false);
       return;
     }
 
@@ -286,6 +599,7 @@ class _ExploreScreenState extends State<ExploreScreen> {
         _selectedGenres.add(genre);
       }
     });
+    _scheduleIndexedSearch(debounce: false);
   }
 
   Future<void> _enrichMissingDriveMetadata({bool force = false}) async {
@@ -310,7 +624,6 @@ class _ExploreScreenState extends State<ExploreScreen> {
     if (targets.isEmpty) return;
 
     setState(() => _isEnrichingMetadata = true);
-    var changed = false;
     try {
       for (final story in targets) {
         final enriched = await ApiService.enrichDriveStoryMetadata(
@@ -327,12 +640,10 @@ class _ExploreScreenState extends State<ExploreScreen> {
         if (index == -1) continue;
         if (_storyMetadataChanged(_serverStories[index], enriched)) {
           _serverStories[index] = enriched;
-          changed = true;
         }
       }
     } finally {
       if (mounted && generation == _driveLoadGeneration) {
-        if (changed) _buildGenreList();
         setState(() => _isEnrichingMetadata = false);
       }
     }
@@ -383,8 +694,24 @@ class _ExploreScreenState extends State<ExploreScreen> {
                         urlController.text,
                       );
                   _serverStories = driveStories;
-                  _buildGenreList();
+                  _seenStoryIds
+                    ..clear()
+                    ..addAll(
+                      driveStories.map(
+                        (story) => story.driveFileId.isNotEmpty
+                            ? story.driveFileId
+                            : story.id,
+                      ),
+                    );
+                  _nextPageToken = null;
+                  _hasMore = false;
                   _loadError = null;
+                  unawaited(
+                    _synchronizeDriveSearch(
+                      force: true,
+                      reloadFolderInputs: true,
+                    ),
+                  );
                   if (mounted) {
                     ScaffoldMessenger.of(context).showSnackBar(
                       SnackBar(
@@ -396,7 +723,6 @@ class _ExploreScreenState extends State<ExploreScreen> {
                   }
                 } catch (e) {
                   _serverStories = [];
-                  _buildGenreList();
                   _loadError = _formatLoadError(e);
                   if (mounted) {
                     ScaffoldMessenger.of(
@@ -570,9 +896,7 @@ class _ExploreScreenState extends State<ExploreScreen> {
                   hintStyle: TextStyle(color: colorScheme.onSurfaceVariant),
                 ),
                 style: TextStyle(color: colorScheme.onSurface, fontSize: 16),
-                onChanged: (value) => setState(() {
-                  _searchQuery = value;
-                }),
+                onChanged: _updateSearchQuery,
               )
             : Row(
                 children: [
@@ -587,9 +911,16 @@ class _ExploreScreenState extends State<ExploreScreen> {
                     child: const Icon(Icons.menu_book, size: 18),
                   ),
                   const SizedBox(width: 8),
-                  const Text(
-                    'Khám phá',
-                    style: TextStyle(fontWeight: FontWeight.bold, fontSize: 20),
+                  const Expanded(
+                    child: Text(
+                      'Khám phá',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        fontWeight: FontWeight.bold,
+                        fontSize: 20,
+                      ),
+                    ),
                   ),
                   if (userProvider.isAdmin) ...[
                     const SizedBox(width: 8),
@@ -618,9 +949,28 @@ class _ExploreScreenState extends State<ExploreScreen> {
                 ],
               ),
         actions: [
+          if (_isSearching)
+            IconButton(
+              icon: const Icon(Icons.manage_search),
+              tooltip: 'Tìm nhiều nguồn',
+              onPressed: () => Navigator.push(
+                context,
+                MaterialPageRoute<void>(
+                  builder: (_) => UnifiedSearchScreen(
+                    initialQuery: _searchQuery,
+                    driveSearchGateway: _driveSearchGateway,
+                    gateway: AppUnifiedSearchGateway(
+                      drive: _driveSearchGateway,
+                      loadPlugins: _loadInstalledPlugins,
+                    ),
+                  ),
+                ),
+              ),
+            ),
           IconButton(
             icon: Icon(_isSearching ? Icons.close : Icons.search),
             onPressed: () {
+              final clearSearch = _isSearching;
               setState(() {
                 if (_isSearching) {
                   _isSearching = false;
@@ -630,6 +980,9 @@ class _ExploreScreenState extends State<ExploreScreen> {
                   _isSearching = true;
                 }
               });
+              if (clearSearch) {
+                _scheduleIndexedSearch(debounce: false);
+              }
             },
           ),
           if (!_isSearching) ...[
@@ -652,13 +1005,17 @@ class _ExploreScreenState extends State<ExploreScreen> {
           ],
         ],
       ),
-      body: _isLoading
+      body: _isLoading && !_hasActiveSearchFilters
           ? const AppLoadingState(message: 'Đang tải danh sách truyện...')
           : NotificationListener<ScrollNotification>(
               onNotification: (scrollInfo) {
                 if (scrollInfo.metrics.pixels >=
                     scrollInfo.metrics.maxScrollExtent - 300) {
-                  if (!_isLoadingMore && _hasMore && _loadMoreError == null) {
+                  if (_hasActiveSearchFilters) {
+                    _loadNextSearchPage();
+                  } else if (!_isLoadingMore &&
+                      _hasMore &&
+                      _loadMoreError == null) {
                     _loadNextPage();
                   }
                 }
@@ -675,11 +1032,22 @@ class _ExploreScreenState extends State<ExploreScreen> {
                     ),
                   ),
                   SliverToBoxAdapter(
+                    child: _buildDriveIndexStatus(accentColor: accentColor),
+                  ),
+                  SliverToBoxAdapter(
                     child: _buildOnlineSourceSection(
                       isDark: isDark,
                       accentColor: accentColor,
                     ),
                   ),
+                  if (_allAuthors.isNotEmpty)
+                    SliverToBoxAdapter(
+                      child: _AuthorFilterBar(
+                        authors: _allAuthors,
+                        selectedAuthor: _selectedAuthor,
+                        onChanged: _selectAuthor,
+                      ),
+                    ),
                   if (_allGenres.length > 1)
                     SliverToBoxAdapter(
                       child: _GenreChipBar(
@@ -774,6 +1142,30 @@ class _ExploreScreenState extends State<ExploreScreen> {
       );
     }
 
+    final baseStyle = Theme.of(context).textTheme.bodyMedium!;
+    final titleStyle = baseStyle.copyWith(
+      fontWeight: FontWeight.bold,
+      fontSize: 13,
+      color: colorScheme.onSurface,
+    );
+    final versionStyle = baseStyle.copyWith(
+      fontSize: 11,
+      color: colorScheme.onSurfaceVariant,
+    );
+    double lineHeight(TextStyle style) {
+      final painter = TextPainter(
+        text: TextSpan(text: 'Ag', style: style),
+        textDirection: Directionality.of(context),
+        textScaler: MediaQuery.textScalerOf(context),
+      )..layout();
+      final height = painter.height;
+      painter.dispose();
+      return height;
+    }
+
+    final cardHeight = (lineHeight(titleStyle) + lineHeight(versionStyle) + 24)
+        .ceilToDouble()
+        .clamp(68.0, double.infinity);
     return Container(
       padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
       decoration: BoxDecoration(
@@ -830,7 +1222,7 @@ class _ExploreScreenState extends State<ExploreScreen> {
           ),
           const SizedBox(height: 10),
           SizedBox(
-            height: 68,
+            height: cardHeight,
             child: ListView.separated(
               scrollDirection: Axis.horizontal,
               itemCount: plugins.length,
@@ -885,19 +1277,14 @@ class _ExploreScreenState extends State<ExploreScreen> {
                                 plugin.name,
                                 maxLines: 1,
                                 overflow: TextOverflow.ellipsis,
-                                style: TextStyle(
-                                  fontWeight: FontWeight.bold,
-                                  fontSize: 13,
-                                  color: colorScheme.onSurface,
-                                ),
+                                style: titleStyle,
                               ),
                               const SizedBox(height: 2),
                               Text(
                                 'v${plugin.version}',
-                                style: TextStyle(
-                                  fontSize: 11,
-                                  color: colorScheme.onSurfaceVariant,
-                                ),
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: versionStyle,
                               ),
                             ],
                           ),
@@ -1070,6 +1457,145 @@ class _ExploreScreenState extends State<ExploreScreen> {
     );
   }
 
+  Widget _buildDriveIndexStatus({required Color accentColor}) {
+    final state = _driveIndexState;
+    final colorScheme = Theme.of(context).colorScheme;
+    late final IconData icon;
+    late final String title;
+    late final String message;
+    late final Color statusColor;
+    late final bool canRetry;
+
+    final indexedLabel = state.totalCount == null
+        ? '${state.indexedCount} truyện'
+        : '${state.indexedCount}/${state.totalCount} truyện';
+    final sourceLabel = state.totalSources == 0
+        ? ''
+        : ' · ${state.completedSources}/${state.totalSources} nguồn';
+
+    switch (state.status) {
+      case SearchIndexStatus.notStarted:
+        icon = Icons.storage_rounded;
+        title = 'Chưa có chỉ mục tìm kiếm';
+        message =
+            'Tìm kiếm sẽ khả dụng khi dữ liệu Drive đầu tiên được lập chỉ mục.';
+        statusColor = colorScheme.onSurfaceVariant;
+        canRetry = true;
+        break;
+      case SearchIndexStatus.indexing:
+        icon = Icons.sync_rounded;
+        title = 'Đang lập chỉ mục thư viện';
+        message =
+            '$indexedLabel$sourceLabel · Kết quả hiện tại có thể chưa đầy đủ.';
+        statusColor = accentColor;
+        canRetry = false;
+        break;
+      case SearchIndexStatus.ready:
+        icon = Icons.check_circle_outline_rounded;
+        title = 'Chỉ mục tìm kiếm đã sẵn sàng';
+        message = '$indexedLabel$sourceLabel';
+        statusColor = const Color(0xFF43866F);
+        canRetry = false;
+        break;
+      case SearchIndexStatus.partial:
+        icon = Icons.info_outline_rounded;
+        title = 'Chỉ mục chưa hoàn tất';
+        message =
+            '$indexedLabel$sourceLabel · Vẫn có thể tìm trong dữ liệu đã lưu.';
+        statusColor = const Color(0xFFA56A17);
+        canRetry = true;
+        break;
+      case SearchIndexStatus.error:
+        icon = Icons.error_outline_rounded;
+        title = 'Không thể cập nhật chỉ mục';
+        message = state.indexedCount > 0
+            ? '$indexedLabel$sourceLabel · Vẫn có thể tìm trong dữ liệu cũ.'
+            : 'Kiểm tra kết nối hoặc cấu hình Drive rồi thử lại.';
+        statusColor = colorScheme.error;
+        canRetry = true;
+        break;
+    }
+
+    final progress =
+        state.status == SearchIndexStatus.indexing && state.totalSources > 0
+        ? state.completedSources / state.totalSources
+        : null;
+
+    return Container(
+      key: const ValueKey('drive-index-status'),
+      width: double.infinity,
+      padding: const EdgeInsets.fromLTRB(16, 10, 12, 10),
+      decoration: BoxDecoration(
+        color: statusColor.withValues(alpha: 0.07),
+        border: Border(
+          bottom: BorderSide(
+            color: colorScheme.outline.withValues(alpha: 0.10),
+          ),
+        ),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(icon, size: 20, color: statusColor),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      title,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        color: colorScheme.onSurface,
+                        fontSize: 13,
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      message,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        color: colorScheme.onSurfaceVariant,
+                        fontSize: 11,
+                        height: 1.3,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              if (canRetry)
+                IconButton(
+                  key: const ValueKey('drive-index-retry'),
+                  onPressed: () => unawaited(
+                    _synchronizeDriveSearch(
+                      force: true,
+                      retryFailedExtractions: true,
+                    ),
+                  ),
+                  tooltip: 'Thử lập chỉ mục lại, gồm metadata bị lỗi',
+                  icon: const Icon(Icons.refresh_rounded),
+                ),
+            ],
+          ),
+          if (progress != null) ...[
+            const SizedBox(height: 8),
+            LinearProgressIndicator(
+              value: progress,
+              minHeight: 3,
+              color: statusColor,
+              backgroundColor: statusColor.withValues(alpha: 0.14),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
   Widget _buildLoadErrorState() {
     return AppErrorState(
       icon: Icons.cloud_off_rounded,
@@ -1082,13 +1608,13 @@ class _ExploreScreenState extends State<ExploreScreen> {
 
   Widget _buildResultHeader(bool isDark, Color accentColor) {
     final stories = _displayStories;
-    final isFiltered =
-        _searchQuery.trim().isNotEmpty || _selectedGenres.isNotEmpty;
-    final selectedLabel = _selectedGenres.isEmpty
+    final isFiltered = _hasActiveSearchFilters;
+    final selectedLabels = <String>[?_selectedAuthor, ..._selectedGenres];
+    final selectedLabel = selectedLabels.isEmpty
         ? ''
-        : _selectedGenres.length <= 3
-        ? _selectedGenres.join(', ')
-        : '${_selectedGenres.take(3).join(', ')} +${_selectedGenres.length - 3}';
+        : selectedLabels.length <= 3
+        ? selectedLabels.join(', ')
+        : '${selectedLabels.take(3).join(', ')} +${selectedLabels.length - 3}';
 
     return Row(
       children: [
@@ -1115,6 +1641,14 @@ class _ExploreScreenState extends State<ExploreScreen> {
             ],
           ),
         ),
+        if (isFiltered && _isSearchLoading) ...[
+          const SizedBox(width: 8),
+          const SizedBox(
+            width: 16,
+            height: 16,
+            child: CircularProgressIndicator(strokeWidth: 2),
+          ),
+        ],
         if (isFiltered)
           TextButton.icon(
             onPressed: () {
@@ -1122,8 +1656,10 @@ class _ExploreScreenState extends State<ExploreScreen> {
                 _searchQuery = '';
                 _searchController.clear();
                 _selectedGenres.clear();
+                _selectedAuthor = null;
                 _isSearching = false;
               });
+              _scheduleIndexedSearch(debounce: false);
             },
             icon: const Icon(Icons.filter_alt_off, size: 16),
             label: const Text('Xóa lọc', style: TextStyle(fontSize: 13)),
@@ -1138,26 +1674,46 @@ class _ExploreScreenState extends State<ExploreScreen> {
 
   List<Widget> _buildSliverStoryGrid(bool isDark) {
     final stories = _displayStories;
+    final isFiltered = _hasActiveSearchFilters;
 
-    if (_loadError != null && _serverStories.isEmpty) {
+    if (!isFiltered && _loadError != null && _serverStories.isEmpty) {
+      return [_buildStoryStateSliver(_buildLoadErrorState())];
+    }
+
+    if (isFiltered && _isSearchLoading && stories.isEmpty) {
       return [
-        SliverFillRemaining(
-          hasScrollBody: false,
-          child: _buildLoadErrorState(),
+        _buildStoryStateSliver(
+          const AppLoadingState(message: 'Đang tìm trong chỉ mục...'),
+          height: 180,
+        ),
+      ];
+    }
+
+    if (isFiltered && _searchError != null && stories.isEmpty) {
+      return [
+        _buildStoryStateSliver(
+          AppErrorState(
+            icon: Icons.storage_rounded,
+            title: 'Không thể tìm trong chỉ mục',
+            message: 'Dữ liệu tìm kiếm chưa đọc được. Vui lòng thử lại.',
+            actionLabel: 'Thử lại',
+            onAction: () => _scheduleIndexedSearch(debounce: false),
+          ),
         ),
       ];
     }
 
     if (stories.isEmpty) {
       return [
-        SliverFillRemaining(
-          hasScrollBody: false,
-          child: AppEmptyState(
+        _buildStoryStateSliver(
+          AppEmptyState(
             icon: Icons.search_off_rounded,
             title: 'Không tìm thấy truyện',
-            message: _searchQuery.isNotEmpty
-                ? 'Thử tìm bằng tên truyện, tác giả hoặc bỏ bớt bộ lọc.'
-                : 'Thể loại này hiện chưa có truyện trong danh sách.',
+            message:
+                _driveIndexState.status == SearchIndexStatus.indexing ||
+                    _driveIndexState.status == SearchIndexStatus.partial
+                ? 'Chưa có kết quả trong phần dữ liệu đã lập chỉ mục. Thử lại khi chỉ mục cập nhật thêm.'
+                : 'Thử tìm bằng tên truyện, tác giả hoặc bỏ bớt bộ lọc.',
           ),
         ),
       ];
@@ -1185,7 +1741,65 @@ class _ExploreScreenState extends State<ExploreScreen> {
           }, childCount: stories.length),
         ),
       ),
-      if (_isLoadingMore)
+      if (isFiltered && _isSearchLoadingMore)
+        SliverToBoxAdapter(
+          child: Padding(
+            padding: const EdgeInsets.only(bottom: 24, top: 4),
+            child: Center(
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const SizedBox(
+                    width: 14,
+                    height: 14,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  ),
+                  const SizedBox(width: 10),
+                  Text(
+                    'Đang tải thêm kết quả...',
+                    style: TextStyle(
+                      fontSize: 12,
+                      color: Theme.of(context).colorScheme.onSurfaceVariant,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        )
+      else if (isFiltered && _searchError != null)
+        SliverToBoxAdapter(
+          child: Padding(
+            padding: const EdgeInsets.only(bottom: 24, top: 4),
+            child: Center(
+              child: TextButton.icon(
+                onPressed: _searchHasMore
+                    ? _loadNextSearchPage
+                    : () => _scheduleIndexedSearch(debounce: false),
+                icon: const Icon(Icons.refresh_rounded, size: 16),
+                label: const Text('Không tải được thêm. Thử lại'),
+              ),
+            ),
+          ),
+        )
+      else if (isFiltered && !_searchHasMore)
+        SliverToBoxAdapter(
+          child: Padding(
+            padding: const EdgeInsets.only(bottom: 24, top: 8),
+            child: Center(
+              child: Text(
+                _driveIndexState.status == SearchIndexStatus.ready
+                    ? 'Đã hiển thị hết kết quả'
+                    : 'Đã hiển thị hết kết quả hiện có trong chỉ mục',
+                style: TextStyle(
+                  fontSize: 12,
+                  color: Theme.of(context).colorScheme.onSurfaceVariant,
+                ),
+              ),
+            ),
+          ),
+        )
+      else if (!isFiltered && _isLoadingMore)
         SliverToBoxAdapter(
           child: Padding(
             padding: const EdgeInsets.only(bottom: 24, top: 4),
@@ -1224,7 +1838,7 @@ class _ExploreScreenState extends State<ExploreScreen> {
             ),
           ),
         )
-      else if (_loadMoreError != null)
+      else if (!isFiltered && _loadMoreError != null)
         SliverToBoxAdapter(
           child: Padding(
             padding: const EdgeInsets.only(bottom: 24, top: 4),
@@ -1237,7 +1851,7 @@ class _ExploreScreenState extends State<ExploreScreen> {
             ),
           ),
         )
-      else if (!_hasMore && stories.isNotEmpty)
+      else if (!isFiltered && !_hasMore && stories.isNotEmpty)
         SliverToBoxAdapter(
           child: Padding(
             padding: const EdgeInsets.only(bottom: 24, top: 8),
@@ -1253,6 +1867,90 @@ class _ExploreScreenState extends State<ExploreScreen> {
           ),
         ),
     ];
+  }
+
+  Widget _buildStoryStateSliver(Widget child, {double height = 300}) {
+    return SliverToBoxAdapter(
+      child: SizedBox(height: height, child: child),
+    );
+  }
+}
+
+class _AuthorFilterBar extends StatelessWidget {
+  const _AuthorFilterBar({
+    required this.authors,
+    required this.selectedAuthor,
+    required this.onChanged,
+  });
+
+  final List<String> authors;
+  final String? selectedAuthor;
+  final ValueChanged<String?> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    final colorScheme = Theme.of(context).colorScheme;
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+      decoration: BoxDecoration(
+        border: Border(
+          bottom: BorderSide(
+            color: colorScheme.outline.withValues(alpha: 0.10),
+          ),
+        ),
+      ),
+      child: Row(
+        children: [
+          Icon(
+            Icons.person_search_rounded,
+            size: 20,
+            color: colorScheme.primary,
+          ),
+          const SizedBox(width: 8),
+          Text(
+            'Tác giả',
+            style: TextStyle(
+              color: colorScheme.onSurfaceVariant,
+              fontSize: 12,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: DropdownButtonHideUnderline(
+              child: DropdownButton<String>(
+                key: const ValueKey('drive-author-filter'),
+                value: selectedAuthor ?? '',
+                isExpanded: true,
+                menuMaxHeight: 360,
+                items: [
+                  const DropdownMenuItem<String>(
+                    value: '',
+                    child: Text(
+                      'Tất cả tác giả',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+                  for (final author in authors)
+                    DropdownMenuItem<String>(
+                      value: author,
+                      child: Text(
+                        author,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                ],
+                onChanged: (value) =>
+                    onChanged(value == null || value.isEmpty ? null : value),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
   }
 }
 

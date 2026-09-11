@@ -1,9 +1,8 @@
-import 'dart:convert';
 import 'package:flutter/material.dart' hide Page;
 import 'package:provider/provider.dart';
-import 'package:cached_network_image/cached_network_image.dart';
+import '../models/online_chapter_content.dart';
+import '../widgets/chapter_image.dart';
 import '../models/plugin_info.dart';
-import '../models/source_models.dart';
 import '../services/plugin/vbook_engine_channel.dart';
 import '../services/plugin/plugin_loader.dart';
 import '../theme/reading_settings_provider.dart';
@@ -20,6 +19,8 @@ class OnlineChapterReaderScreen extends StatefulWidget {
   final String chapterUrl;
   final String chapterTitle;
   final String storyTitle;
+  final String? storyUrl;
+  final OfflineDownloadService? downloads;
   final List<ChapterNav>? allChapters;
   final int currentIndex;
 
@@ -29,6 +30,8 @@ class OnlineChapterReaderScreen extends StatefulWidget {
     required this.chapterUrl,
     required this.chapterTitle,
     this.storyTitle = '',
+    this.storyUrl,
+    this.downloads,
     this.allChapters,
     this.currentIndex = 0,
   });
@@ -51,7 +54,18 @@ class _OnlineChapterReaderScreenState extends State<OnlineChapterReaderScreen> {
 
   bool _isLoading = true;
   String? _error;
-  List<Page> _pages = [];
+  List<ChapterBlock> _blocks = [];
+  List<ChapterBlock>? _translatedSource;
+  bool? _translatedEnabled;
+  List<String> _displayBlocks = [];
+  List<int> _displayOffsets = [];
+  String _displayText = '';
+  int _loadGeneration = 0;
+  OfflineDownloadService get _downloads =>
+      widget.downloads ?? OfflineDownloadService.instance;
+  String get _bookTitle => widget.storyTitle.trim().isNotEmpty
+      ? widget.storyTitle
+      : widget.chapterTitle;
   String _content = '';
   bool _isComic = false;
   bool _showToolbars = true;
@@ -62,6 +76,8 @@ class _OnlineChapterReaderScreenState extends State<OnlineChapterReaderScreen> {
       _currentIndex < (widget.allChapters!.length - 1);
 
   final ScrollController _scrollController = ScrollController();
+  final GlobalKey _bottomBarKey = GlobalKey();
+  double _bottomBarHeight = 180;
 
   @override
   void initState() {
@@ -78,112 +94,140 @@ class _OnlineChapterReaderScreenState extends State<OnlineChapterReaderScreen> {
     super.dispose();
   }
 
-  String _cleanTextContent(String text) {
-    return text
-        .replaceAll(RegExp(r'<br\s*/?>', caseSensitive: false), '\n')
-        .replaceAll(RegExp(r'</p>', caseSensitive: false), '\n\n')
-        .replaceAll(RegExp(r'<[^>]*>'), '')
-        .replaceAll(RegExp(r'&nbsp;', caseSensitive: false), ' ')
-        .replaceAll(RegExp(r'&lt;', caseSensitive: false), '<')
-        .replaceAll(RegExp(r'&gt;', caseSensitive: false), '>')
-        .replaceAll(RegExp(r'&amp;', caseSensitive: false), '&')
-        .replaceAll(RegExp(r'&quot;', caseSensitive: false), '"')
-        .replaceAll(RegExp(r'\n{3,}'), '\n\n')
-        .trim();
-  }
-
   Future<void> _loadContent() async {
+    final generation = ++_loadGeneration;
+    final url = _currentUrl;
+    final index = _currentIndex;
     setState(() {
       _isLoading = true;
       _error = null;
-      _pages = [];
+      _blocks = [];
       _content = '';
     });
-
-    final downloadedContent = await OfflineDownloadService.instance
-        .getDownloadedChapterContent(
-          widget.plugin.id,
-          widget.storyTitle,
-          _currentIndex,
-        );
-
-    if (downloadedContent != null && downloadedContent.trim().isNotEmpty) {
-      if (mounted) {
-        setState(() {
-          final trimmed = downloadedContent.trim();
-          if (trimmed.startsWith('[') && trimmed.endsWith(']')) {
-            try {
-              final List<dynamic> list = jsonDecode(trimmed);
-              _pages = list
-                  .asMap()
-                  .entries
-                  .map((e) => Page(e.key, '', e.value.toString()))
-                  .toList();
-              _isComic = true;
-            } catch (_) {
-              _content = _cleanTextContent(trimmed);
-              _isComic = false;
-            }
-          } else {
-            _content = _cleanTextContent(trimmed);
-            _isComic = false;
-          }
-          _isLoading = false;
-        });
-
-        if (_scrollController.hasClients) {
-          _scrollController.jumpTo(0);
-        }
-      }
-      return;
-    }
-
     try {
-      final dirPath = await PluginLoader.getPluginDir(widget.plugin.id);
-      await VBookEngineChannel.loadSource(widget.plugin.id, dirPath);
-
-      final pagesList = await VBookEngineChannel.getPageList(
-        widget.plugin.id,
-        _currentUrl,
-      );
-      if (mounted) {
-        setState(() {
-          _pages = pagesList;
-          final firstUrl = _pages.isNotEmpty ? _pages.first.imageUrl : '';
-          final isImageUrl =
-              firstUrl.startsWith('http://') ||
-              firstUrl.startsWith('https://') ||
-              RegExp(
-                r'\.(jpg|jpeg|png|webp|gif)',
-                caseSensitive: false,
-              ).hasMatch(firstUrl);
-
-          _isComic =
-              widget.plugin.type == 'comic' ||
-              (_pages.length > 1 && isImageUrl);
-
-          if (!_isComic && _pages.isNotEmpty) {
-            String rawContent = _pages.first.imageUrl;
-            if (rawContent.startsWith('vbook-text://')) {
-              rawContent = rawContent.substring(13);
-            }
-            _content = _cleanTextContent(rawContent);
-          }
-          _isLoading = false;
-        });
-
-        // Reset scroll position to top when chapter changes
-        if (_scrollController.hasClients) {
-          _scrollController.jumpTo(0);
+      OnlineChapterContent? content;
+      try {
+        final stored = await _downloads.getDownloadedChapterContent(
+          widget.plugin.id,
+          _bookTitle,
+          index,
+          storyUrl: widget.storyUrl,
+          chapterUrl: url,
+          sourceType: widget.plugin.type,
+        );
+        if (stored != null) {
+          content = OnlineChapterContent.decode(
+            stored,
+            chapterUrl: url,
+            sourceType: widget.plugin.type,
+          );
         }
+      } catch (_) {
+        // A damaged local chapter must not leave the reader stuck loading.
       }
-    } catch (e) {
-      if (mounted) {
-        setState(() {
-          _error = e.toString();
-          _isLoading = false;
-        });
+      if (!mounted || generation != _loadGeneration) return;
+      if (content == null) {
+        final dirPath = await PluginLoader.getPluginDir(widget.plugin.id);
+        final ready = await VBookEngineChannel.loadSource(
+          widget.plugin.id,
+          dirPath,
+        );
+        if (!mounted || generation != _loadGeneration) return;
+        if (!ready) throw StateError('Source unavailable.');
+        final pages = await VBookEngineChannel.getPageList(
+          widget.plugin.id,
+          url,
+        );
+        content = OnlineChapterContent.fromPages(
+          pages,
+          chapterUrl: url,
+          sourceType: widget.plugin.type,
+        );
       }
+      if (!mounted || generation != _loadGeneration) return;
+      setState(() {
+        _blocks = content!.blocks;
+        _content = content.text;
+        _isComic = content.isComic;
+        _isLoading = false;
+      });
+      if (_scrollController.hasClients) _scrollController.jumpTo(0);
+    } catch (_) {
+      if (!mounted || generation != _loadGeneration) return;
+      setState(() {
+        _error =
+            'Nguồn chưa trả nội dung hợp lệ. Hãy thử lại hoặc mở trang nguồn để kiểm tra đăng nhập.';
+        _isLoading = false;
+      });
+    }
+  }
+
+  Future<void> _startDownload() async {
+    try {
+      final chapters =
+          widget.allChapters
+              ?.map((c) => {'url': c.url, 'name': c.name})
+              .toList() ??
+          [
+            {'url': _currentUrl, 'name': _currentTitle},
+          ];
+      await _downloads.startBatchDownload(
+        plugin: widget.plugin,
+        storyTitle: _bookTitle,
+        storyUrl: widget.storyUrl,
+        chapters: chapters,
+      );
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            _downloads.status == DownloadStatus.completed
+                ? 'Đã tải đủ chương và ảnh.'
+                : _downloads.errorMessage.isNotEmpty
+                ? _downloads.errorMessage
+                : 'Đã dừng tải.',
+          ),
+        ),
+      );
+    } catch (_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Chưa thể bắt đầu tải. Hãy kiểm tra lượt tải hiện tại.',
+          ),
+        ),
+      );
+    }
+  }
+
+  Future<void> _exportEpub() async {
+    try {
+      final file = await _downloads.exportToEpub(
+        widget.plugin.id,
+        _bookTitle,
+        widget.allChapters?.length ?? 1,
+        storyUrl: widget.storyUrl,
+      );
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            file == null
+                ? 'Hãy tải truyện trước khi xuất EPUB.'
+                : 'Đã xuất EPUB theo tên truyện.',
+          ),
+        ),
+      );
+    } catch (_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Chưa thể xuất EPUB. Hãy tải lại chương hoặc ảnh còn thiếu.',
+          ),
+        ),
+      );
     }
   }
 
@@ -510,84 +554,27 @@ class _OnlineChapterReaderScreenState extends State<OnlineChapterReaderScreen> {
     );
   }
 
-  Widget _buildComicPageImage(String rawUrl, ColorScheme colorScheme) {
-    if (rawUrl.isEmpty) return const SizedBox.shrink();
-
-    String imgUrl = rawUrl.trim();
-
-    if (imgUrl.startsWith('vbook-base64://')) {
-      final b64Str = imgUrl.substring(15);
-      try {
-        final bytes = base64Decode(b64Str);
-        return Image.memory(bytes, fit: BoxFit.contain);
-      } catch (_) {}
-    }
-
-    if (imgUrl.startsWith('data:image/')) {
-      try {
-        final commaIndex = imgUrl.indexOf(',');
-        if (commaIndex != -1) {
-          final b64Str = imgUrl.substring(commaIndex + 1);
-          final bytes = base64Decode(b64Str);
-          return Image.memory(bytes, fit: BoxFit.contain);
-        }
-      } catch (_) {}
-    }
-
-    final uri = Uri.tryParse(imgUrl);
-    final imgHost = (uri != null && uri.host.isNotEmpty)
-        ? '${uri.scheme}://${uri.host}/'
-        : '';
-    final referer = _currentUrl.startsWith('http')
-        ? _currentUrl
-        : (widget.plugin.source.startsWith('http')
-              ? widget.plugin.source
-              : imgHost);
-
-    final Map<String, String> headers = {
-      'User-Agent':
-          'Mozilla/5.0 (Linux; Android 13; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36',
-      'Referer': referer,
-    };
-
-    return CachedNetworkImage(
-      imageUrl: imgUrl,
-      httpHeaders: headers,
-      fit: BoxFit.contain,
-      placeholder: (ctx, url) => Container(
-        height: 350,
-        color: colorScheme.surfaceContainerHighest.withValues(alpha: 0.3),
-        child: const Center(child: CircularProgressIndicator()),
+  Widget _buildBlock(int index, ReadingSettingsProvider settings) {
+    final block = _blocks[index];
+    if (block.isImage) return ChapterImage(block: block, referer: _currentUrl);
+    final offset = _displayOffsets[index];
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 16),
+      child: ReaderSelectableText(
+        _displayBlocks[index],
+        style: settings.bodyTextStyle,
+        onSelectionSpeak: (selectedText, start, end) {
+          TtsService.instance.speakFromSelection(
+            fullText: _displayText,
+            selectedText: selectedText,
+            selectionStart: offset + start,
+            selectionEnd: offset + end,
+            onChapterComplete: _hasNext
+                ? () => _goToChapter(_currentIndex + 1)
+                : null,
+          );
+        },
       ),
-      errorWidget: (ctx, url, err) {
-        return Image.network(
-          imgUrl,
-          headers: headers,
-          fit: BoxFit.contain,
-          errorBuilder: (context, error, stackTrace) {
-            return Container(
-              height: 250,
-              color: colorScheme.errorContainer.withValues(alpha: 0.2),
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  const Icon(
-                    Icons.broken_image_rounded,
-                    size: 48,
-                    color: Colors.red,
-                  ),
-                  const SizedBox(height: 8),
-                  Text(
-                    'Không tải được ảnh (${err.toString().split("\n").first})',
-                    style: const TextStyle(fontSize: 12, color: Colors.red),
-                    textAlign: TextAlign.center,
-                  ),
-                ],
-              ),
-            );
-          },
-        );
-      },
     );
   }
 
@@ -595,6 +582,35 @@ class _OnlineChapterReaderScreenState extends State<OnlineChapterReaderScreen> {
   Widget build(BuildContext context) {
     final settings = context.watch<ReadingSettingsProvider>();
     final colorScheme = Theme.of(context).colorScheme;
+    final translator = HanVietTranslatorService.instance;
+    if (!identical(_translatedSource, _blocks) ||
+        _translatedEnabled != translator.enabled) {
+      _translatedSource = _blocks;
+      _translatedEnabled = translator.enabled;
+      _displayBlocks = [];
+      _displayOffsets = [];
+      final texts = <String>[];
+      var offset = 0;
+      for (final block in _blocks) {
+        final text = block.isImage ? '' : translator.translate(block.value);
+        _displayBlocks.add(text);
+        _displayOffsets.add(offset);
+        if (!block.isImage) {
+          texts.add(text);
+          offset += text.length + 2;
+        }
+      }
+      _displayText = texts.join('\n\n');
+    }
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      final box = _bottomBarKey.currentContext?.findRenderObject();
+      if (box is RenderBox &&
+          box.hasSize &&
+          (box.size.height - _bottomBarHeight).abs() > 0.5) {
+        setState(() => _bottomBarHeight = box.size.height);
+      }
+    });
 
     return Scaffold(
       backgroundColor: settings.bgColor,
@@ -660,20 +676,24 @@ class _OnlineChapterReaderScreenState extends State<OnlineChapterReaderScreen> {
                       maxScale: 3.5,
                       child: ListView.builder(
                         controller: _scrollController,
-                        padding: const EdgeInsets.only(bottom: 80),
-                        itemCount: _pages.length,
+                        padding: EdgeInsets.only(
+                          top: 64,
+                          bottom: _bottomBarHeight + 24,
+                        ),
+                        itemCount: _blocks.length,
                         itemBuilder: (context, index) {
-                          final page = _pages[index];
-                          final imgUrl = page.imageUrl.isNotEmpty
-                              ? page.imageUrl
-                              : page.url;
-                          return _buildComicPageImage(imgUrl, colorScheme);
+                          return _buildBlock(index, settings);
                         },
                       ),
                     )
                   : SingleChildScrollView(
                       controller: _scrollController,
-                      padding: const EdgeInsets.fromLTRB(20, 56, 20, 100),
+                      padding: EdgeInsets.fromLTRB(
+                        20,
+                        72,
+                        20,
+                        _bottomBarHeight + 24,
+                      ),
                       child: Center(
                         child: ConstrainedBox(
                           constraints: const BoxConstraints(maxWidth: 780),
@@ -689,30 +709,8 @@ class _OnlineChapterReaderScreenState extends State<OnlineChapterReaderScreen> {
                                 ),
                               ),
                               const SizedBox(height: 20),
-                              ReaderSelectableText(
-                                _content.isEmpty
-                                    ? 'Chương này chưa có nội dung.'
-                                    : HanVietTranslatorService.instance
-                                          .translate(_content),
-                                style: settings.bodyTextStyle,
-                                onSelectionSpeak: (selectedText, start, end) {
-                                  if (_content.isNotEmpty) {
-                                    final translated = HanVietTranslatorService
-                                        .instance
-                                        .translate(_content);
-                                    TtsService.instance.speakFromSelection(
-                                      fullText: translated,
-                                      selectedText: selectedText,
-                                      selectionStart: start,
-                                      selectionEnd: end,
-                                      onChapterComplete: _hasNext
-                                          ? () =>
-                                                _goToChapter(_currentIndex + 1)
-                                          : null,
-                                    );
-                                  }
-                                },
-                              ),
+                              for (var i = 0; i < _blocks.length; i++)
+                                _buildBlock(i, settings),
                               const SizedBox(height: 60),
                               // End of Chapter indicator
                               Center(
@@ -756,121 +754,125 @@ class _OnlineChapterReaderScreenState extends State<OnlineChapterReaderScreen> {
             ),
 
             // Top Overlay Bar (Animates in/out)
-            AnimatedSlide(
-              duration: const Duration(milliseconds: 250),
-              offset: _showToolbars ? Offset.zero : const Offset(0, -1),
-              child: AnimatedOpacity(
+            Positioned(
+              top: 0,
+              left: 0,
+              right: 0,
+              child: AnimatedSlide(
                 duration: const Duration(milliseconds: 250),
-                opacity: _showToolbars ? 1 : 0,
-                child: Container(
-                  decoration: BoxDecoration(
-                    color: settings.bgColor.withValues(alpha: 0.98),
-                    border: Border(
-                      bottom: BorderSide(
-                        color: settings.textColor.withValues(alpha: 0.08),
+                offset: _showToolbars ? Offset.zero : const Offset(0, -1),
+                child: AnimatedOpacity(
+                  duration: const Duration(milliseconds: 250),
+                  opacity: _showToolbars ? 1 : 0,
+                  child: Container(
+                    decoration: BoxDecoration(
+                      color: settings.bgColor.withValues(alpha: 0.98),
+                      border: Border(
+                        bottom: BorderSide(
+                          color: settings.textColor.withValues(alpha: 0.08),
+                        ),
                       ),
+                      boxShadow: [
+                        BoxShadow(
+                          color: Colors.black.withValues(alpha: 0.08),
+                          blurRadius: 10,
+                        ),
+                      ],
                     ),
-                    boxShadow: [
-                      BoxShadow(
-                        color: Colors.black.withValues(alpha: 0.08),
-                        blurRadius: 10,
-                      ),
-                    ],
-                  ),
-                  child: SafeArea(
-                    child: Padding(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 4,
-                        vertical: 4,
-                      ),
-                      child: Row(
-                        children: [
-                          IconButton(
-                            icon: Icon(
-                              Icons.arrow_back_ios_new,
-                              color: settings.textColor,
-                              size: 20,
+                    child: SafeArea(
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 4,
+                          vertical: 4,
+                        ),
+                        child: Row(
+                          children: [
+                            IconButton(
+                              icon: Icon(
+                                Icons.arrow_back_ios_new,
+                                color: settings.textColor,
+                                size: 20,
+                              ),
+                              onPressed: () => Navigator.pop(context),
                             ),
-                            onPressed: () => Navigator.pop(context),
-                          ),
-                          Expanded(
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                Text(
-                                  _currentTitle,
-                                  style: settings.bodyTextStyle.copyWith(
-                                    fontSize: 14,
-                                    fontWeight: FontWeight.bold,
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Text(
+                                    _currentTitle,
+                                    style: settings.bodyTextStyle.copyWith(
+                                      fontSize: 14,
+                                      fontWeight: FontWeight.bold,
+                                    ),
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
                                   ),
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
-                                ),
-                                Text(
-                                  widget.plugin.name,
-                                  style: TextStyle(
-                                    color: settings.textColor.withAlpha(140),
-                                    fontSize: 11,
+                                  Text(
+                                    widget.plugin.name,
+                                    style: TextStyle(
+                                      color: settings.textColor.withAlpha(140),
+                                      fontSize: 11,
+                                    ),
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
                                   ),
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
-                                ),
-                              ],
+                                ],
+                              ),
                             ),
-                          ),
 
-                          // Quick Action Menu Buttons
-                          if (!_isComic) ...[
+                            // Quick Action Menu Buttons
+                            if (!_isComic) ...[
+                              IconButton(
+                                icon: Icon(
+                                  Icons.volume_up_rounded,
+                                  color: settings.textColor,
+                                ),
+                                tooltip: 'Đọc tự động (TTS)',
+                                onPressed: () {
+                                  TtsControlSheet.show(
+                                    context,
+                                    textContent: _content,
+                                    onNextChapter: _hasNext
+                                        ? () => _goToChapter(_currentIndex + 1)
+                                        : null,
+                                  );
+                                },
+                              ),
+                              IconButton(
+                                icon: Icon(
+                                  Icons.format_list_bulleted_rounded,
+                                  color: settings.textColor,
+                                ),
+                                tooltip: 'Mục lục chương',
+                                onPressed: _showChapterListModal,
+                              ),
+                              IconButton(
+                                icon: Icon(
+                                  Icons.tune_rounded,
+                                  color: settings.textColor,
+                                ),
+                                tooltip: 'Tùy chỉnh giao diện',
+                                onPressed: _showSettingsModal,
+                              ),
+                            ],
                             IconButton(
                               icon: Icon(
-                                Icons.volume_up_rounded,
+                                Icons.open_in_browser_outlined,
                                 color: settings.textColor,
                               ),
-                              tooltip: 'Đọc tự động (TTS)',
-                              onPressed: () {
-                                TtsControlSheet.show(
-                                  context,
-                                  textContent: _content,
-                                  onNextChapter: _hasNext
-                                      ? () => _goToChapter(_currentIndex + 1)
-                                      : null,
-                                );
-                              },
-                            ),
-                            IconButton(
-                              icon: Icon(
-                                Icons.format_list_bulleted_rounded,
-                                color: settings.textColor,
-                              ),
-                              tooltip: 'Mục lục chương',
-                              onPressed: _showChapterListModal,
-                            ),
-                            IconButton(
-                              icon: Icon(
-                                Icons.tune_rounded,
-                                color: settings.textColor,
-                              ),
-                              tooltip: 'Tùy chỉnh giao diện',
-                              onPressed: _showSettingsModal,
+                              tooltip: 'Mở web / Đăng nhập',
+                              onPressed: _openBrowser,
                             ),
                           ],
-                          IconButton(
-                            icon: Icon(
-                              Icons.open_in_browser_outlined,
-                              color: settings.textColor,
-                            ),
-                            tooltip: 'Mở web / Đăng nhập',
-                            onPressed: _openBrowser,
-                          ),
-                        ],
+                        ),
                       ),
                     ),
                   ),
                 ),
               ),
             ),
-
             // Bottom Overlay Bar (Animates in/out)
             Positioned(
               bottom: 0,
@@ -883,6 +885,7 @@ class _OnlineChapterReaderScreenState extends State<OnlineChapterReaderScreen> {
                   duration: const Duration(milliseconds: 250),
                   opacity: _showToolbars ? 1 : 0,
                   child: Container(
+                    key: _bottomBarKey,
                     decoration: BoxDecoration(
                       color: settings.bgColor.withValues(alpha: 0.98),
                       border: Border(
@@ -955,14 +958,14 @@ class _OnlineChapterReaderScreenState extends State<OnlineChapterReaderScreen> {
                                 mainAxisAlignment:
                                     MainAxisAlignment.spaceBetween,
                                 children: [
-                                  TextButton.icon(
+                                  IconButton(
                                     onPressed: _hasPrevious
                                         ? () => _goToChapter(_currentIndex - 1)
                                         : null,
                                     icon: const Icon(
                                       Icons.chevron_left_rounded,
                                     ),
-                                    label: const Text('Trước'),
+                                    tooltip: 'Chương trước',
                                   ),
                                   GestureDetector(
                                     onTap: _showChapterListModal,
@@ -998,12 +1001,12 @@ class _OnlineChapterReaderScreenState extends State<OnlineChapterReaderScreen> {
                                       ),
                                     ),
                                   ),
-                                  TextButton.icon(
+                                  IconButton(
                                     onPressed: _hasNext
                                         ? () => _goToChapter(_currentIndex + 1)
                                         : null,
-                                    icon: const Text('Sau'),
-                                    label: const Icon(
+                                    tooltip: 'Chương sau',
+                                    icon: const Icon(
                                       Icons.chevron_right_rounded,
                                     ),
                                   ),
@@ -1019,8 +1022,11 @@ class _OnlineChapterReaderScreenState extends State<OnlineChapterReaderScreen> {
                               horizontal: 16,
                             ),
                             color: settings.textColor.withAlpha(10),
-                            child: Row(
-                              mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                            child: Wrap(
+                              alignment: WrapAlignment.spaceEvenly,
+                              crossAxisAlignment: WrapCrossAlignment.center,
+                              spacing: 8,
+                              runSpacing: 4,
                               children: [
                                 TextButton.icon(
                                   onPressed: () {
@@ -1055,38 +1061,7 @@ class _OnlineChapterReaderScreenState extends State<OnlineChapterReaderScreen> {
                                   ),
                                 ),
                                 TextButton.icon(
-                                  onPressed: () async {
-                                    final chaptersMap =
-                                        widget.allChapters
-                                            ?.map(
-                                              (c) => {
-                                                'url': c.url,
-                                                'name': c.name,
-                                              },
-                                            )
-                                            .toList() ??
-                                        [
-                                          {
-                                            'url': _currentUrl,
-                                            'name': _currentTitle,
-                                          },
-                                        ];
-                                    ScaffoldMessenger.of(context).showSnackBar(
-                                      SnackBar(
-                                        content: Text(
-                                          'Bắt đầu tải ${chaptersMap.length} chương offline...',
-                                        ),
-                                        duration: const Duration(seconds: 2),
-                                      ),
-                                    );
-                                    await OfflineDownloadService.instance
-                                        .startBatchDownload(
-                                          plugin: widget.plugin,
-                                          storyTitle: _currentTitle,
-                                          chapters: chaptersMap,
-                                          startFrom: _currentIndex,
-                                        );
-                                  },
+                                  onPressed: _startDownload,
                                   icon: Icon(
                                     Icons.download_rounded,
                                     size: 16,
@@ -1101,28 +1076,7 @@ class _OnlineChapterReaderScreenState extends State<OnlineChapterReaderScreen> {
                                   ),
                                 ),
                                 TextButton.icon(
-                                  onPressed: () async {
-                                    final messenger = ScaffoldMessenger.of(
-                                      context,
-                                    );
-                                    final file = await OfflineDownloadService
-                                        .instance
-                                        .exportToEpub(
-                                          widget.plugin.id,
-                                          _currentTitle,
-                                          widget.allChapters?.length ?? 1,
-                                        );
-                                    if (!mounted) return;
-                                    messenger.showSnackBar(
-                                      SnackBar(
-                                        content: Text(
-                                          file != null
-                                              ? 'Đã xuất file EPUB thành công!'
-                                              : 'Hãy tải offline truyện trước khi xuất EPUB!',
-                                        ),
-                                      ),
-                                    );
-                                  },
+                                  onPressed: _exportEpub,
                                   icon: Icon(
                                     Icons.menu_book_outlined,
                                     size: 16,
@@ -1149,7 +1103,7 @@ class _OnlineChapterReaderScreenState extends State<OnlineChapterReaderScreen> {
             Positioned(
               left: 0,
               right: 0,
-              bottom: _showToolbars ? 110 : 10,
+              bottom: _showToolbars ? _bottomBarHeight : 10,
               child: TtsPlayerContainer(
                 textColor: settings.textColor,
                 onPreviousChapter: _hasPrevious

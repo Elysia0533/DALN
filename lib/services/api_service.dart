@@ -803,13 +803,17 @@ class ApiService {
     return count;
   }
 
-  static Future<List<Story>> fetchPersonalStories() async {
+  static Future<List<Story>> fetchPersonalStories({
+    bool repairCovers = true,
+  }) async {
     SharedPreferences prefs = await SharedPreferences.getInstance();
     List<String> localStoriesJson = prefs.getStringList(_localStoriesKey) ?? [];
     final stories = localStoriesJson
         .map((s) => Story.fromJson(json.decode(s)))
         .toList();
-    unawaited(_repairMissingLocalEpubCovers(prefs, stories));
+    if (repairCovers) {
+      unawaited(_repairMissingLocalEpubCovers(prefs, stories));
+    }
     return stories;
   }
 

@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 import '../models/plugin_info.dart';
+import '../models/search_capabilities.dart';
 import 'plugin/plugin_loader.dart';
 import 'plugin/vbook_engine_channel.dart';
 
@@ -34,6 +35,7 @@ class ExtensionService {
       'https://raw.githubusercontent.com/Darkrai9x/vbook-extensions/master/plugin.json';
   static const String _prefsKeyInstalled = 'installed_plugins';
   static const String _prefsKeyRegistries = 'plugin_registries';
+  static const int _maxLocalManifestBytes = 1024 * 1024;
   static int _installValidationSequence = 0;
 
   /// Các registry được tích hợp sẵn (luôn có, không thể xóa)
@@ -145,8 +147,12 @@ class ExtensionService {
         );
         final installed = installedMap[plugin.id];
         if (installed != null) {
-          plugin.isInstalled = true;
-          plugin.installedVersion = installed.installedVersion;
+          return plugin.copyWith(
+            scripts: installed.scripts,
+            searchCapabilities: installed.searchCapabilities,
+            isInstalled: true,
+            installedVersion: installed.installedVersion,
+          );
         }
         return plugin;
       }).toList();
@@ -201,22 +207,10 @@ class ExtensionService {
       customId: plugin.id,
     );
 
-    final updatedPlugin = PluginInfo(
-      id: plugin.id,
-      name: plugin.name,
-      author: plugin.author,
-      source: plugin.source,
-      iconUrl: plugin.iconUrl,
-      description: plugin.description,
-      type: plugin.type,
-      locale: plugin.locale,
-      version: plugin.version,
-      isNsfw: plugin.isNsfw,
-      downloadUrl: plugin.downloadUrl,
-      scripts: plugin.scripts,
-      isInstalled: true,
-      installedVersion: plugin.version,
-    );
+    final updatedPlugin = _withManifestSearchMetadata(
+      plugin,
+      prepared.pluginJson,
+    ).copyWith(isInstalled: true, installedVersion: plugin.version);
     await _installPreparedPlugin(
       prepared: prepared,
       plugin: updatedPlugin,
@@ -296,6 +290,7 @@ class ExtensionService {
         downloadUrl: parsed.downloadUrl,
         isNsfw: parsed.isNsfw,
         scripts: parsed.scripts,
+        searchCapabilities: parsed.searchCapabilities,
         isInstalled: true,
         installedVersion: parsed.version,
       );
@@ -471,7 +466,114 @@ class ExtensionService {
         '(${error.runtimeType}).',
       );
     }
+
+    var searchMetadataChanged = false;
+    final hydrated = <PluginInfo>[];
+    for (final plugin in installed) {
+      final resolved = await _hydrateInstalledSearchMetadata(
+        plugin,
+        pluginsRoot: pluginsRoot,
+      );
+      searchMetadataChanged =
+          searchMetadataChanged ||
+          !_sameStringMap(plugin.scripts, resolved.scripts) ||
+          plugin.searchCapabilities != resolved.searchCapabilities;
+      hydrated.add(resolved);
+    }
+    installed = hydrated;
+
+    if (searchMetadataChanged) {
+      try {
+        await _saveInstalledPlugins(installed);
+      } catch (error) {
+        debugPrint(
+          '[ExtensionService] Could not persist migrated extension search '
+          'metadata (${error.runtimeType}).',
+        );
+      }
+    }
     return installed;
+  }
+
+  static Future<PluginInfo> _hydrateInstalledSearchMetadata(
+    PluginInfo plugin, {
+    Directory? pluginsRoot,
+  }) async {
+    try {
+      final pluginDirectory = Directory(
+        await PluginLoader.getPluginDir(plugin.id, pluginsRoot: pluginsRoot),
+      );
+      final manifest = await _findInstalledManifest(pluginDirectory);
+      if (manifest == null ||
+          await manifest.length() > _maxLocalManifestBytes) {
+        return plugin;
+      }
+
+      final decoded = jsonDecode(await manifest.readAsString());
+      if (decoded is! Map) return plugin;
+      return _withManifestSearchMetadata(
+        plugin,
+        Map<String, dynamic>.from(decoded),
+      );
+    } catch (error) {
+      debugPrint(
+        '[ExtensionService] Could not read local search metadata for '
+        '${plugin.id} (${error.runtimeType}).',
+      );
+      return plugin;
+    }
+  }
+
+  static Future<File?> _findInstalledManifest(Directory pluginDirectory) async {
+    final rootManifest = File(
+      '${pluginDirectory.path}${Platform.pathSeparator}plugin.json',
+    );
+    if (await FileSystemEntity.type(rootManifest.path, followLinks: false) ==
+        FileSystemEntityType.file) {
+      return rootManifest;
+    }
+    if (!await pluginDirectory.exists()) return null;
+
+    final nestedManifests = <File>[];
+    await for (final entity in pluginDirectory.list(followLinks: false)) {
+      if (entity is! Directory) continue;
+      final candidate = File(
+        '${entity.path}${Platform.pathSeparator}plugin.json',
+      );
+      if (await FileSystemEntity.type(candidate.path, followLinks: false) ==
+          FileSystemEntityType.file) {
+        nestedManifests.add(candidate);
+      }
+    }
+    return nestedManifests.length == 1 ? nestedManifests.single : null;
+  }
+
+  static PluginInfo _withManifestSearchMetadata(
+    PluginInfo plugin,
+    Map<String, dynamic> manifest,
+  ) {
+    final manifestPlugin = PluginInfo.fromRegistryJson(manifest);
+    final scripts = manifestPlugin.scripts.isEmpty
+        ? plugin.scripts
+        : manifestPlugin.scripts;
+    return plugin.copyWith(
+      scripts: scripts,
+      searchCapabilities: SearchCapabilities.fromPluginJson(
+        manifest,
+        scripts: scripts,
+      ),
+    );
+  }
+
+  static bool _sameStringMap(
+    Map<String, String> left,
+    Map<String, String> right,
+  ) {
+    if (left.length != right.length) return false;
+    for (final entry in left.entries) {
+      if (right[entry.key] != entry.value) return false;
+    }
+    return true;
   }
 
   static Future<void> _saveInstalledPlugins(List<PluginInfo> plugins) async {

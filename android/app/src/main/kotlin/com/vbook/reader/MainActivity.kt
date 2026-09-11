@@ -94,6 +94,20 @@ class MainActivity : FlutterActivity() {
 
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, ENGINE_CHANNEL).setMethodCallHandler { call, result ->
             when (call.method) {
+                "getImageBytes" -> {
+                    val url = call.argument<String>("url").orEmpty()
+                    val referer = call.argument<String>("referer").orEmpty()
+                    engineScope.launch {
+                        try {
+                            val bytes = ChapterImageLoader(client).load(url, referer)
+                            withContext(Dispatchers.Main) { result.success(bytes) }
+                        } catch (_: Exception) {
+                            withContext(Dispatchers.Main) {
+                                result.error("IMAGE_LOAD_FAILED", "The chapter image could not be loaded.", null)
+                            }
+                        }
+                    }
+                }
                 "loadSource" -> {
                     val id = call.argument<String>("id") ?: return@setMethodCallHandler result.error("INVALID_ID", "Plugin ID is null", null)
                     val dirPath = call.argument<String>("dirPath") ?: return@setMethodCallHandler result.error("INVALID_DIR", "Directory path is null", null)

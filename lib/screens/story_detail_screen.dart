@@ -183,7 +183,18 @@ class _StoryDetailScreenState extends State<StoryDetailScreen> {
         RegExp(r'[^A-Za-z0-9_-]'),
         '_',
       );
-      var cachedFile = File('${cacheDirectory.path}/$safeId.txt');
+      final cacheName = FileNameUtils.storageFileName(
+        title: _story.title,
+        uniqueId: safeId,
+        extension: 'txt',
+      );
+      var cachedFile = File('${cacheDirectory.path}/$cacheName');
+      final legacyCache = File('${cacheDirectory.path}/$safeId.txt');
+      if (!await cachedFile.exists() &&
+          await legacyCache.exists() &&
+          await legacyCache.length() > 0) {
+        cachedFile = legacyCache;
+      }
       if (!await cachedFile.exists() || await cachedFile.length() == 0) {
         cachedFile = await GoogleDriveService.downloadFileToFile(
           _story.driveFileId,
@@ -259,7 +270,8 @@ class _StoryDetailScreenState extends State<StoryDetailScreen> {
   }
 
   bool get _canReadOnline =>
-      (_story.isFromDrive || (_story.pluginId.isNotEmpty && _story.storyUrl.isNotEmpty)) &&
+      (_story.isFromDrive ||
+          (_story.pluginId.isNotEmpty && _story.storyUrl.isNotEmpty)) &&
       _story.localPath.isEmpty;
 
   Future<void> _openExtensionOnline() async {

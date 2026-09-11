@@ -129,6 +129,168 @@ void main() {
       ]);
     },
   );
+
+  for (final conflict in ['checksum', 'modifiedTime', 'size', 'mimeType']) {
+    test('catalog $conflict conflict retains the live file fallback', () async {
+      final client = _metadataClient(
+        folders: {
+          'root': [
+            _file(
+              'story',
+              'Current.txt',
+              modifiedTime: '2026-09-10T00:00:00Z',
+              size: '1024',
+              checksum: 'current-checksum',
+            ),
+            _file('catalog', 'catalog.json', mimeType: 'application/json'),
+          ],
+        },
+        downloads: {
+          'catalog': [
+            {
+              'driveFileId': 'story',
+              'title': 'Outdated title',
+              'authors': ['Outdated author'],
+              'genres': ['Outdated genre'],
+              'metadataStatus': 'complete',
+              if (conflict == 'checksum') 'checksum': 'outdated-checksum',
+              if (conflict == 'modifiedTime')
+                'modifiedTime': '2026-09-01T00:00:00Z',
+              if (conflict == 'size') 'size': 512,
+              if (conflict == 'mimeType') 'mimeType': 'application/epub+zip',
+            },
+          ],
+        },
+      );
+      addTearDown(client.close);
+
+      final snapshot =
+          await GoogleDriveService.fetchMetadataIndexSnapshotForTesting(
+            client: client,
+            rootFolderId: 'root',
+          );
+      final record = snapshot.records.single;
+      expect(snapshot.warningCount, 1);
+      expect(snapshot.traversalComplete, isTrue);
+      expect(record.origin, DriveMetadataOrigin.driveFile);
+      expect(record.title, 'Current');
+      expect(record.authors, isEmpty);
+      expect(record.genres, isEmpty);
+      expect(record.metadataStatus, SearchMetadataStatus.missing);
+      expect(record.checksum, 'current-checksum');
+      expect(record.modifiedTime, DateTime.utc(2026, 9, 10));
+      expect(record.fileSize, 1024);
+      expect(record.mimeType, 'text/plain');
+    });
+  }
+
+  test(
+    'catalog revision cannot substitute missing live revision evidence',
+    () async {
+      final client = _metadataClient(
+        folders: {
+          'root': [
+            _file('story', 'Current.epub'),
+            _file('catalog', 'catalog.json', mimeType: 'application/json'),
+          ],
+        },
+        downloads: {
+          'catalog': [
+            {
+              'driveFileId': 'story',
+              'title': 'Published title',
+              'modifiedTime': '2026-09-01T00:00:00Z',
+              'size': 8192,
+              'checksum': 'unverified-revision',
+            },
+          ],
+        },
+      );
+      addTearDown(client.close);
+      final snapshot =
+          await GoogleDriveService.fetchMetadataIndexSnapshotForTesting(
+            client: client,
+            rootFolderId: 'root',
+          );
+      final record = snapshot.records.single;
+      expect(snapshot.warningCount, 0);
+      expect(record.title, 'Published title');
+      expect(record.origin, DriveMetadataOrigin.catalog);
+      expect(record.modifiedTime, isNull);
+      expect(record.fileSize, isNull);
+      expect(record.checksum, isNull);
+    },
+  );
+
+  test('equal content checksums allow a changed Drive timestamp', () async {
+    final client = _metadataClient(
+      folders: {
+        'root': [
+          _file(
+            'story',
+            'Current.epub',
+            modifiedTime: '2026-09-10T00:00:00Z',
+            checksum: 'same-content',
+            size: '1024',
+          ),
+          _file('catalog', 'catalog.json', mimeType: 'application/json'),
+        ],
+      },
+      downloads: {
+        'catalog': [
+          {
+            'driveFileId': 'story',
+            'title': 'Published title',
+            'modifiedTime': '2026-09-01T00:00:00Z',
+            'checksum': 'same-content',
+            'size': 1024,
+          },
+        ],
+      },
+    );
+    addTearDown(client.close);
+    final snapshot =
+        await GoogleDriveService.fetchMetadataIndexSnapshotForTesting(
+          client: client,
+          rootFolderId: 'root',
+        );
+    expect(snapshot.warningCount, 0);
+    expect(snapshot.records.single.title, 'Published title');
+    expect(snapshot.records.single.origin, DriveMetadataOrigin.catalog);
+    expect(snapshot.records.single.modifiedTime, DateTime.utc(2026, 9, 10));
+  });
+
+  test('stale catalog retains available sidecar metadata', () async {
+    final client = _metadataClient(
+      folders: {
+        'root': [
+          _file('story', 'Current.txt', checksum: 'new-content'),
+          _file('info', 'info.json', mimeType: 'application/json'),
+          _file('catalog', 'catalog.json', mimeType: 'application/json'),
+        ],
+      },
+      downloads: {
+        'info': {'title': 'Sidecar title', 'author': 'Sidecar author'},
+        'catalog': [
+          {
+            'driveFileId': 'story',
+            'title': 'Outdated title',
+            'checksum': 'old-content',
+          },
+        ],
+      },
+    );
+    addTearDown(client.close);
+    final snapshot =
+        await GoogleDriveService.fetchMetadataIndexSnapshotForTesting(
+          client: client,
+          rootFolderId: 'root',
+        );
+    expect(snapshot.warningCount, 1);
+    expect(snapshot.records.single.origin, DriveMetadataOrigin.sidecar);
+    expect(snapshot.records.single.title, 'Sidecar title');
+    expect(snapshot.records.single.authors, ['Sidecar author']);
+  });
 }
 
 MockClient _metadataClient({

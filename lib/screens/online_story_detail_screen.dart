@@ -39,6 +39,9 @@ class _OnlineStoryDetailScreenState extends State<OnlineStoryDetailScreen> {
   bool _isLoadingChapters = true;
   bool _isAddingToLibrary = false;
   bool _addedToLibrary = false;
+  String get _storyTitle => _detail?.title.trim().isNotEmpty == true
+      ? _detail!.title
+      : widget.initialTitle;
 
   @override
   void initState() {
@@ -94,12 +97,10 @@ class _OnlineStoryDetailScreenState extends State<OnlineStoryDetailScreen> {
   Future<void> _checkIfAdded() async {
     final stories = await ApiService.fetchPersonalStories();
     final exists = stories.any(
-      (s) =>
-          s.storyUrl == widget.storyUrl ||
-          (s.pluginId == widget.plugin.id && s.title == widget.initialTitle),
+      (s) => s.pluginId == widget.plugin.id && s.storyUrl == widget.storyUrl,
     );
-    if (mounted && exists) {
-      setState(() => _addedToLibrary = true);
+    if (mounted) {
+      setState(() => _addedToLibrary = exists);
     }
   }
 
@@ -203,7 +204,7 @@ class _OnlineStoryDetailScreenState extends State<OnlineStoryDetailScreen> {
       return;
     }
 
-    final storyTitle = _detail?.title ?? widget.initialTitle;
+    final storyTitle = _storyTitle;
     final result = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
@@ -225,6 +226,7 @@ class _OnlineStoryDetailScreenState extends State<OnlineStoryDetailScreen> {
     );
 
     if (result != true) return;
+    if (!mounted) return;
 
     final chaptersMap = _chapters
         .map((ch) => {'url': ch.url, 'name': ch.name})
@@ -232,11 +234,23 @@ class _OnlineStoryDetailScreenState extends State<OnlineStoryDetailScreen> {
 
     _showDownloadProgressSheet();
 
-    await OfflineDownloadService.instance.startBatchDownload(
-      plugin: widget.plugin,
-      storyTitle: storyTitle,
-      chapters: chaptersMap,
-    );
+    try {
+      await OfflineDownloadService.instance.startBatchDownload(
+        plugin: widget.plugin,
+        storyTitle: storyTitle,
+        storyUrl: widget.storyUrl,
+        chapters: chaptersMap,
+      );
+    } catch (_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Một lượt tải đang chạy. Hãy chờ lượt tải hiện tại dừng.',
+          ),
+        ),
+      );
+    }
   }
 
   void _showDownloadProgressSheet() {
@@ -277,18 +291,19 @@ class _OnlineStoryDetailScreenState extends State<OnlineStoryDetailScreen> {
                                     : Theme.of(context).primaryColor),
                         ),
                         const SizedBox(width: 10),
-                        Text(
-                          isDone
-                              ? 'Tải hoàn tất!'
-                              : (isError
-                                    ? 'Lỗi khi tải'
-                                    : 'Đang tải về offline...'),
-                          style: const TextStyle(
-                            fontSize: 16,
-                            fontWeight: FontWeight.bold,
+                        Expanded(
+                          child: Text(
+                            isDone
+                                ? 'Tải hoàn tất!'
+                                : (isError
+                                      ? 'Lỗi khi tải'
+                                      : 'Đang tải về offline...'),
+                            style: const TextStyle(
+                              fontSize: 16,
+                              fontWeight: FontWeight.bold,
+                            ),
                           ),
                         ),
-                        const Spacer(),
                         if (isDone || isError)
                           IconButton(
                             icon: const Icon(Icons.close),
@@ -340,19 +355,21 @@ class _OnlineStoryDetailScreenState extends State<OnlineStoryDetailScreen> {
                         style: const TextStyle(fontSize: 13, color: Colors.red),
                       ),
                       const SizedBox(height: 16),
-                      Row(
-                        mainAxisAlignment: MainAxisAlignment.end,
+                      Wrap(
+                        alignment: WrapAlignment.end,
+                        spacing: 10,
+                        runSpacing: 8,
                         children: [
                           OutlinedButton.icon(
                             onPressed: () {
-                              final storyTitle =
-                                  _detail?.title ?? widget.initialTitle;
+                              final storyTitle = _storyTitle;
                               final chaptersMap = _chapters
                                   .map((ch) => {'url': ch.url, 'name': ch.name})
                                   .toList();
                               service.startBatchDownload(
                                 plugin: widget.plugin,
                                 storyTitle: storyTitle,
+                                storyUrl: widget.storyUrl,
                                 chapters: chaptersMap,
                               );
                             },
@@ -374,8 +391,10 @@ class _OnlineStoryDetailScreenState extends State<OnlineStoryDetailScreen> {
                     if (isDone) ...[
                       const Text('Toàn bộ chương đã được lưu ngoại tuyến.'),
                       const SizedBox(height: 16),
-                      Row(
-                        mainAxisAlignment: MainAxisAlignment.end,
+                      Wrap(
+                        alignment: WrapAlignment.end,
+                        spacing: 10,
+                        runSpacing: 8,
                         children: [
                           OutlinedButton.icon(
                             onPressed: () {
@@ -404,52 +423,64 @@ class _OnlineStoryDetailScreenState extends State<OnlineStoryDetailScreen> {
   }
 
   Future<void> _exportEpubFlow() async {
-    final title = _detail?.title ?? widget.initialTitle;
+    final title = _storyTitle;
     final author = _detail?.author ?? 'VBook Source';
 
     ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(content: Text('Đang khởi tạo và đóng gói file EPUB...')),
     );
 
-    final file = await OfflineDownloadService.instance.exportToEpub(
-      widget.plugin.id,
-      title,
-      _chapters.length,
-      author: author,
-    );
-
-    final exportedFile = file;
-    final exportedFileExists =
-        exportedFile != null && await exportedFile.exists();
-    if (!mounted) return;
-
-    if (exportedFile != null && exportedFileExists) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
-            'Đã xuất file EPUB: ${exportedFile.path.split('/').last}',
-          ),
-          backgroundColor: Colors.green.shade700,
-          behavior: SnackBarBehavior.floating,
-          action: SnackBarAction(
-            label: 'Chia sẻ / Lưu',
-            textColor: Colors.white,
-            onPressed: () {
-              Share.shareXFiles([
-                XFile(exportedFile.path),
-              ], text: 'Truyện "$title" (Định dạng EPUB)');
-            },
-          ),
-        ),
+    try {
+      final file = await OfflineDownloadService.instance.exportToEpub(
+        widget.plugin.id,
+        title,
+        _chapters.length,
+        author: author,
+        storyUrl: widget.storyUrl,
       );
-    } else {
+
+      final exportedFile = file;
+      final exportedFileExists =
+          exportedFile != null && await exportedFile.exists();
+      if (!mounted) return;
+
+      if (exportedFile != null && exportedFileExists) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              'Đã xuất file EPUB: ${exportedFile.path.split('/').last}',
+            ),
+            backgroundColor: Colors.green.shade700,
+            behavior: SnackBarBehavior.floating,
+            action: SnackBarAction(
+              label: 'Chia sẻ / Lưu',
+              textColor: Colors.white,
+              onPressed: () {
+                Share.shareXFiles([
+                  XFile(exportedFile.path),
+                ], text: 'Truyện "$title" (Định dạng EPUB)');
+              },
+            ),
+          ),
+        );
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              'Chưa có chương offline nào được tải. Vui lòng bấm Tải Offline trước khi xuất EPUB.',
+            ),
+            backgroundColor: Colors.orange,
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+      }
+    } catch (_) {
+      if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
           content: Text(
-            'Chưa có chương offline nào được tải. Vui lòng bấm Tải Offline trước khi xuất EPUB.',
+            'Chưa thể xuất EPUB. Hãy tải lại chương hoặc ảnh còn thiếu.',
           ),
-          backgroundColor: Colors.orange,
-          behavior: SnackBarBehavior.floating,
         ),
       );
     }
@@ -662,6 +693,7 @@ class _OnlineStoryDetailScreenState extends State<OnlineStoryDetailScreen> {
                                             builder: (_) =>
                                                 OnlineChapterReaderScreen(
                                                   plugin: widget.plugin,
+                                                  storyUrl: widget.storyUrl,
                                                   chapterUrl:
                                                       _chapters.first.url,
                                                   chapterTitle:
@@ -671,9 +703,7 @@ class _OnlineStoryDetailScreenState extends State<OnlineStoryDetailScreen> {
                                                           .isNotEmpty
                                                       ? _chapters.first.name
                                                       : 'Chương 1',
-                                                  storyTitle:
-                                                      _detail?.title ??
-                                                      widget.initialTitle,
+                                                  storyTitle: _storyTitle,
                                                   allChapters:
                                                       _buildChapterNavList(),
                                                   currentIndex: 0,
@@ -799,12 +829,12 @@ class _OnlineStoryDetailScreenState extends State<OnlineStoryDetailScreen> {
                             MaterialPageRoute(
                               builder: (_) => OnlineChapterReaderScreen(
                                 plugin: widget.plugin,
+                                storyUrl: widget.storyUrl,
                                 chapterUrl: chapter.url,
                                 chapterTitle: chapter.name.isNotEmpty
                                     ? chapter.name
                                     : 'Chương ${index + 1}',
-                                storyTitle:
-                                    _detail?.title ?? widget.initialTitle,
+                                storyTitle: _storyTitle,
                                 allChapters: _buildChapterNavList(),
                                 currentIndex: index,
                               ),

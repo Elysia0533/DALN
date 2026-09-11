@@ -4,6 +4,7 @@ import '../models/plugin_info.dart';
 import '../services/plugin/vbook_engine_channel.dart';
 import '../services/plugin/plugin_loader.dart';
 import '../services/extension_service.dart';
+import '../services/search/extension_search_service.dart';
 import '../models/source_models.dart';
 import '../widgets/story_cover_image.dart';
 import 'online_story_detail_screen.dart';
@@ -40,6 +41,7 @@ class _SourceBrowseScreenState extends State<SourceBrowseScreen> {
 
   final TextEditingController _searchController = TextEditingController();
   final ScrollController _scrollController = ScrollController();
+  final ExtensionSearchService _searchService = ExtensionSearchService();
 
   @override
   void initState() {
@@ -60,8 +62,23 @@ class _SourceBrowseScreenState extends State<SourceBrowseScreen> {
   Future<void> _loadInstalledPlugins() async {
     final list = await ExtensionService.getInstalledPlugins();
     if (mounted) {
+      PluginInfo? installedCurrent;
+      for (final plugin in list) {
+        if (plugin.id == _currentPlugin.id) {
+          installedCurrent = plugin;
+          break;
+        }
+      }
       setState(() {
         _installedPlugins = list;
+        if (installedCurrent != null) {
+          _currentPlugin = installedCurrent;
+          if (!_currentPlugin.searchCapabilities.supportsKeyword) {
+            _isSearching = false;
+            _currentSearchQuery = '';
+            _searchController.clear();
+          }
+        }
       });
     }
   }
@@ -198,10 +215,10 @@ class _SourceBrowseScreenState extends State<SourceBrowseScreen> {
       final nextPage = _currentPage + 1;
       MangasPage? page;
       if (_currentSearchQuery.isNotEmpty) {
-        page = await VBookEngineChannel.getSearchManga(
-          _currentPlugin.id,
-          _currentSearchQuery,
-          nextPage,
+        page = await _searchService.searchKeyword(
+          plugin: _currentPlugin,
+          query: _currentSearchQuery,
+          page: nextPage,
         );
       } else if (_dynamicTabs.isNotEmpty &&
           _selectedTab < _dynamicTabs.length) {
@@ -250,6 +267,14 @@ class _SourceBrowseScreenState extends State<SourceBrowseScreen> {
       _loadHome();
       return;
     }
+    if (!_currentPlugin.searchCapabilities.supportsKeyword) {
+      setState(() {
+        _isSearching = false;
+        _isLoading = false;
+        _error = 'Nguồn này không hỗ trợ tìm kiếm theo từ khóa.';
+      });
+      return;
+    }
     setState(() {
       _isLoading = true;
       _error = null;
@@ -259,15 +284,14 @@ class _SourceBrowseScreenState extends State<SourceBrowseScreen> {
     });
     try {
       await _ensurePluginLoaded(_currentPlugin);
-      final page = await VBookEngineChannel.getSearchManga(
-        _currentPlugin.id,
-        query.trim(),
-        1,
+      final page = await _searchService.searchKeyword(
+        plugin: _currentPlugin,
+        query: query,
       );
       if (mounted) {
         setState(() {
-          _stories = page?.mangas ?? [];
-          _hasNextPage = page?.hasNextPage ?? false;
+          _stories = page.mangas;
+          _hasNextPage = page.hasNextPage;
           _isLoading = false;
         });
       }
@@ -287,6 +311,9 @@ class _SourceBrowseScreenState extends State<SourceBrowseScreen> {
       _currentPlugin = plugin;
       _dynamicTabs = [];
       _selectedTab = 0;
+      _isSearching = false;
+      _currentSearchQuery = '';
+      _searchController.clear();
     });
     _loadHome();
   }
@@ -574,18 +601,21 @@ class _SourceBrowseScreenState extends State<SourceBrowseScreen> {
                 ),
               ),
         actions: [
-          IconButton(
-            icon: Icon(_isSearching ? Icons.close : Icons.search),
-            onPressed: () {
-              setState(() {
-                _isSearching = !_isSearching;
-                if (!_isSearching) {
-                  _searchController.clear();
-                  _loadHome();
-                }
-              });
-            },
-          ),
+          if (_currentPlugin.searchCapabilities.supportsKeyword)
+            IconButton(
+              key: const ValueKey('extension-keyword-search'),
+              icon: Icon(_isSearching ? Icons.close : Icons.search),
+              tooltip: _isSearching ? 'Đóng tìm kiếm' : 'Tìm kiếm',
+              onPressed: () {
+                setState(() {
+                  _isSearching = !_isSearching;
+                  if (!_isSearching) {
+                    _searchController.clear();
+                    _loadHome();
+                  }
+                });
+              },
+            ),
           IconButton(
             icon: const Icon(Icons.tune_rounded),
             tooltip: 'Tùy chọn hiển thị & nguồn',

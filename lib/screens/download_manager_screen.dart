@@ -1,36 +1,92 @@
 import 'package:flutter/material.dart';
 import 'package:share_plus/share_plus.dart';
+import 'package:path/path.dart' as p;
 import '../models/plugin_info.dart';
 import '../services/offline_download_service.dart';
 import 'online_chapter_reader_screen.dart';
 
 class DownloadManagerScreen extends StatefulWidget {
-  const DownloadManagerScreen({super.key});
+  const DownloadManagerScreen({super.key, this.downloads});
+  final OfflineDownloadService? downloads;
 
   @override
   State<DownloadManagerScreen> createState() => _DownloadManagerScreenState();
 }
 
 class _DownloadManagerScreenState extends State<DownloadManagerScreen> {
+  OfflineDownloadService get _service =>
+      widget.downloads ?? OfflineDownloadService.instance;
   String _storagePath = 'Đang kiểm tra...';
   List<Map<String, dynamic>> _downloadedStories = [];
   bool _isLoadingList = true;
+  String? _listError;
+  int _listGeneration = 0;
+  DownloadStatus? _observedStatus;
 
   @override
   void initState() {
     super.initState();
+    _observedStatus = _service.status;
+    _service.addListener(_onDownloadChanged);
     _loadStorageInfo();
   }
 
+  @override
+  void dispose() {
+    _service.removeListener(_onDownloadChanged);
+    super.dispose();
+  }
+
+  void _onDownloadChanged() {
+    final status = _service.status;
+    if (status == _observedStatus) return;
+    _observedStatus = status;
+    if (status != DownloadStatus.downloading) _loadStorageInfo();
+  }
+
+  PluginInfo _offlinePlugin(Map<String, dynamic> story) {
+    final data = story['plugin'];
+    if (data is Map) {
+      try {
+        return PluginInfo.fromJson(Map<String, dynamic>.from(data));
+      } catch (_) {
+        /* Legacy metadata can lack plugin fields. */
+      }
+    }
+    final id = story['pluginId'] as String;
+    return PluginInfo(
+      id: id,
+      name: id,
+      version: 1,
+      author: 'vBook',
+      description: '',
+      iconUrl: '',
+      downloadUrl: '',
+      locale: 'vi',
+      source: '',
+      type: story['type'] as String,
+    );
+  }
+
   Future<void> _loadStorageInfo() async {
-    final path = await OfflineDownloadService.instance.publicStoragePath;
-    final stories = await OfflineDownloadService.instance
-        .getDownloadedStories();
-    if (mounted) {
+    final generation = ++_listGeneration;
+    try {
+      final path = await _service.publicStoragePath;
+      final stories = await _service.getDownloadedStories();
+      if (mounted && generation == _listGeneration) {
+        setState(() {
+          _storagePath = path;
+          _downloadedStories = stories;
+          _isLoadingList = false;
+          _listError = null;
+        });
+      }
+    } catch (_) {
+      if (!mounted || generation != _listGeneration) return;
       setState(() {
-        _storagePath = path;
-        _downloadedStories = stories;
         _isLoadingList = false;
+        _listError =
+            'Không đọc được danh sách tải xuống. Hãy kiểm tra quyền lưu trữ rồi thử lại.';
       });
     }
   }
@@ -51,9 +107,9 @@ class _DownloadManagerScreenState extends State<DownloadManagerScreen> {
         ],
       ),
       body: ListenableBuilder(
-        listenable: OfflineDownloadService.instance,
+        listenable: _service,
         builder: (context, _) {
-          final service = OfflineDownloadService.instance;
+          final service = _service;
           final isDownloading = service.status == DownloadStatus.downloading;
           final isError = service.status == DownloadStatus.error;
           final progressPct = (service.progress * 100).toInt();
@@ -180,7 +236,7 @@ class _DownloadManagerScreenState extends State<DownloadManagerScreen> {
                           Row(
                             children: [
                               Flexible(
-                                flex: 0,
+                                flex: 1,
                                 child: Text(
                                   '${service.downloadedCount}/${service.totalChapters} chương ($progressPct%)',
                                   maxLines: 1,
@@ -216,7 +272,9 @@ class _DownloadManagerScreenState extends State<DownloadManagerScreen> {
                 ),
 
               // 3. Failed Chapters Warning & Re-download Button
-              if (isError || service.failedCount > 0)
+              if (isError ||
+                  service.failedCount > 0 ||
+                  service.status == DownloadStatus.paused)
                 SliverToBoxAdapter(
                   child: Card(
                     margin: const EdgeInsets.symmetric(
@@ -242,7 +300,9 @@ class _DownloadManagerScreenState extends State<DownloadManagerScreen> {
                               const SizedBox(width: 12),
                               Expanded(
                                 child: Text(
-                                  'Có ${service.failedCount} chương bị lỗi khi tải về!',
+                                  service.status == DownloadStatus.paused
+                                      ? 'Lượt tải đã dừng'
+                                      : 'Còn chương hoặc ảnh chưa tải xong',
                                   style: TextStyle(
                                     fontWeight: FontWeight.bold,
                                     fontSize: 14,
@@ -254,7 +314,9 @@ class _DownloadManagerScreenState extends State<DownloadManagerScreen> {
                           ),
                           const SizedBox(height: 8),
                           Text(
-                            'Nguồn truyện bị gián đoạn mạng hoặc phản hồi chậm. Bấm nút dưới đây để tải lại các chương lỗi.',
+                            service.errorMessage.isNotEmpty
+                                ? service.errorMessage
+                                : 'Dữ liệu đã tải được giữ nguyên.',
                             style: TextStyle(
                               fontSize: 12,
                               color: colorScheme.onErrorContainer.withValues(
@@ -270,15 +332,12 @@ class _DownloadManagerScreenState extends State<DownloadManagerScreen> {
                                 backgroundColor: Colors.red.shade700,
                                 foregroundColor: Colors.white,
                               ),
-                              onPressed: () {
-                                ScaffoldMessenger.of(context).showSnackBar(
-                                  const SnackBar(
-                                    content: Text(
-                                      'Bắt đầu tải lại các chương bị lỗi...',
-                                    ),
-                                  ),
-                                );
-                              },
+                              onPressed: service.canRetry
+                                  ? () async {
+                                      await service.retryFailedDownloads();
+                                      if (mounted) await _loadStorageInfo();
+                                    }
+                                  : null,
                               icon: const Icon(Icons.refresh),
                               label: Text(
                                 'Tải lại ${service.failedCount > 0 ? "${service.failedCount} chương lỗi" : "chương thiếu"}',
@@ -295,8 +354,11 @@ class _DownloadManagerScreenState extends State<DownloadManagerScreen> {
               SliverToBoxAdapter(
                 child: Padding(
                   padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
-                  child: Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  child: Wrap(
+                    alignment: WrapAlignment.spaceBetween,
+                    crossAxisAlignment: WrapCrossAlignment.center,
+                    spacing: 12,
+                    runSpacing: 4,
                     children: [
                       const Text(
                         'Truyện đã lưu ngoại tuyến',
@@ -336,7 +398,8 @@ class _DownloadManagerScreenState extends State<DownloadManagerScreen> {
                             ),
                             const SizedBox(height: 12),
                             Text(
-                              'Chưa có truyện nào được tải về',
+                              _listError ?? 'Chưa có truyện nào được tải về',
+                              textAlign: TextAlign.center,
                               style: TextStyle(
                                 fontSize: 15,
                                 color: colorScheme.outline,
@@ -353,6 +416,8 @@ class _DownloadManagerScreenState extends State<DownloadManagerScreen> {
                         final pluginId = story['pluginId'] as String;
                         final count = story['chapterCount'] as int;
                         final folderPath = story['folderPath'] as String;
+                        final storyUrl = story['storyUrl'] as String?;
+                        final total = story['totalChapters'] as int;
 
                         return Card(
                           margin: const EdgeInsets.symmetric(
@@ -372,32 +437,28 @@ class _DownloadManagerScreenState extends State<DownloadManagerScreen> {
                                     ),
                                   )
                                   .toList();
+                              final firstIndex =
+                                  (story['firstChapterIndex'] as int).clamp(
+                                    0,
+                                    navList.isEmpty ? 0 : navList.length - 1,
+                                  );
 
                               Navigator.push(
                                 context,
                                 MaterialPageRoute(
                                   builder: (_) => OnlineChapterReaderScreen(
-                                    plugin: PluginInfo(
-                                      id: pluginId,
-                                      name: pluginId,
-                                      version: 1,
-                                      author: 'vBook',
-                                      description: '',
-                                      iconUrl: '',
-                                      downloadUrl: '',
-                                      locale: 'vi',
-                                      source: '',
-                                      type: 'novel',
-                                    ),
+                                    downloads: _service,
+                                    plugin: _offlinePlugin(story),
                                     chapterUrl: navList.isNotEmpty
-                                        ? navList.first.url
+                                        ? navList[firstIndex].url
                                         : '',
                                     chapterTitle: navList.isNotEmpty
-                                        ? navList.first.name
+                                        ? navList[firstIndex].name
                                         : 'Chương 1',
                                     storyTitle: title,
+                                    storyUrl: storyUrl,
                                     allChapters: navList,
-                                    currentIndex: 0,
+                                    currentIndex: firstIndex,
                                   ),
                                 ),
                               );
@@ -424,31 +485,94 @@ class _DownloadManagerScreenState extends State<DownloadManagerScreen> {
                             ),
                             trailing: PopupMenuButton<String>(
                               onSelected: (value) async {
-                                if (value == 'epub') {
-                                  final file = await OfflineDownloadService
-                                      .instance
-                                      .exportToEpub(pluginId, title, count);
-                                  if (file != null && mounted) {
-                                    Share.shareXFiles([
-                                      XFile(file.path),
-                                    ], text: 'Truyện "$title" (File EPUB)');
+                                try {
+                                  if (value == 'epub') {
+                                    final file = await _service.exportToEpub(
+                                      pluginId,
+                                      title,
+                                      total,
+                                      storyUrl: storyUrl,
+                                    );
+                                    if (file == null) {
+                                      throw StateError(
+                                        'No downloaded chapters.',
+                                      );
+                                    }
+                                    if (mounted) {
+                                      await Share.shareXFiles([
+                                        XFile(
+                                          file.path,
+                                          name: p.basename(file.path),
+                                        ),
+                                      ], text: 'Truyện "$title" (File EPUB)');
+                                    }
+                                  } else if (value == 'txt') {
+                                    final file = await _service.exportToTxt(
+                                      pluginId,
+                                      title,
+                                      total,
+                                      storyUrl: storyUrl,
+                                    );
+                                    if (file == null) {
+                                      throw StateError(
+                                        'No downloaded chapters.',
+                                      );
+                                    }
+                                    if (mounted) {
+                                      await Share.shareXFiles([
+                                        XFile(
+                                          file.path,
+                                          name: p.basename(file.path),
+                                        ),
+                                      ], text: 'Truyện "$title" (File TXT)');
+                                    }
+                                  } else if (value == 'resume') {
+                                    final chapters = (story['chapters'] as List)
+                                        .map(
+                                          (entry) => Map<String, String>.from(
+                                            entry as Map,
+                                          ),
+                                        )
+                                        .toList();
+                                    await _service.startBatchDownload(
+                                      plugin: _offlinePlugin(story),
+                                      storyTitle: title,
+                                      storyUrl: storyUrl,
+                                      chapters: chapters,
+                                    );
+                                  } else if (value == 'delete') {
+                                    await _service.deleteDownloadedStory(
+                                      folderPath,
+                                    );
+                                    _loadStorageInfo();
                                   }
-                                } else if (value == 'txt') {
-                                  final file = await OfflineDownloadService
-                                      .instance
-                                      .exportToTxt(pluginId, title, count);
-                                  if (file != null && mounted) {
-                                    Share.shareXFiles([
-                                      XFile(file.path),
-                                    ], text: 'Truyện "$title" (File TXT)');
-                                  }
-                                } else if (value == 'delete') {
-                                  await OfflineDownloadService.instance
-                                      .deleteDownloadedStory(folderPath);
-                                  _loadStorageInfo();
+                                } catch (_) {
+                                  if (!context.mounted) return;
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                    const SnackBar(
+                                      content: Text(
+                                        'Không thể hoàn tất. Hãy kiểm tra lượt tải và tải lại chương hoặc ảnh còn thiếu.',
+                                      ),
+                                    ),
+                                  );
                                 }
                               },
                               itemBuilder: (ctx) => [
+                                if (total > 0)
+                                  const PopupMenuItem(
+                                    value: 'resume',
+                                    child: Row(
+                                      children: [
+                                        Icon(Icons.download_rounded, size: 18),
+                                        SizedBox(width: 8),
+                                        Flexible(
+                                          child: Text(
+                                            'Tải chương và ảnh còn thiếu',
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
                                 const PopupMenuItem(
                                   value: 'epub',
                                   child: Row(

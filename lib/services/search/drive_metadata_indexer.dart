@@ -7,12 +7,29 @@ import '../database/database_service.dart';
 import '../google_drive_service.dart';
 import 'search_index_repository.dart';
 import 'search_text_normalizer.dart';
+import 'book_metadata_extractor.dart';
+import 'epub_metadata_extractor.dart';
+import 'txt_metadata_extractor.dart';
 
 typedef DriveMetadataSnapshotLoader =
     Future<DriveMetadataSnapshot> Function(String folderInput);
 typedef DriveFolderIdParser = String? Function(String folderInput);
 typedef SearchIndexClock = DateTime Function();
 typedef SearchIndexRunIdFactory = String Function();
+
+typedef DriveIndexProgressCallback = void Function(DriveIndexProgress progress);
+
+class DriveIndexProgress {
+  const DriveIndexProgress({
+    required this.indexedCount,
+    required this.totalCount,
+    required this.metadataChanged,
+  });
+
+  final int indexedCount;
+  final int? totalCount;
+  final bool metadataChanged;
+}
 
 class DriveMetadataIndexResult {
   const DriveMetadataIndexResult({
@@ -47,9 +64,13 @@ class DriveMetadataIndexer {
     required DriveFolderIdParser folderIdParser,
     SearchIndexClock? clock,
     SearchIndexRunIdFactory? runIdFactory,
+    TxtMetadataLoader? txtMetadataLoader,
+    BookMetadataLoader? epubMetadataLoader,
   }) : _repository = repository,
        _snapshotLoader = snapshotLoader,
        _folderIdParser = folderIdParser,
+       _txtMetadataLoader = txtMetadataLoader,
+       _epubMetadataLoader = epubMetadataLoader,
        _clock = clock ?? DateTime.now,
        _runIdFactory = runIdFactory ?? const Uuid().v4;
 
@@ -58,16 +79,25 @@ class DriveMetadataIndexer {
     repository: SearchIndexRepository(DatabaseService.instance),
     snapshotLoader: GoogleDriveService.fetchMetadataIndexSnapshot,
     folderIdParser: GoogleDriveService.extractFolderId,
+    txtMetadataLoader: TxtMetadataExtractor.extract,
+    epubMetadataLoader: EpubMetadataExtractor.extract,
   );
 
   final SearchIndexRepository _repository;
   final DriveMetadataSnapshotLoader _snapshotLoader;
   final DriveFolderIdParser _folderIdParser;
+  final TxtMetadataLoader? _txtMetadataLoader;
+  final BookMetadataLoader? _epubMetadataLoader;
+  static const maxExtractionAttempts = 3;
   final SearchIndexClock _clock;
   final SearchIndexRunIdFactory _runIdFactory;
   final Map<String, Future<DriveMetadataIndexResult>> _activeSyncs = {};
 
-  Future<DriveMetadataIndexResult> synchronizeFolder(String folderInput) async {
+  Future<DriveMetadataIndexResult> synchronizeFolder(
+    String folderInput, {
+    DriveIndexProgressCallback? onProgress,
+    bool retryFailedExtractions = false,
+  }) async {
     final sourceId = _folderIdParser(folderInput)?.trim();
     if (sourceId == null || sourceId.isEmpty) {
       throw ArgumentError.value(
@@ -80,7 +110,11 @@ class DriveMetadataIndexer {
     final activeSync = _activeSyncs[sourceId];
     if (activeSync != null) return activeSync;
 
-    final sync = _synchronizeSource(sourceId);
+    final sync = _synchronizeSource(
+      sourceId,
+      onProgress: onProgress,
+      retryFailedExtractions: retryFailedExtractions,
+    );
     _activeSyncs[sourceId] = sync;
     try {
       return await sync;
@@ -91,7 +125,11 @@ class DriveMetadataIndexer {
     }
   }
 
-  Future<DriveMetadataIndexResult> _synchronizeSource(String sourceId) async {
+  Future<DriveMetadataIndexResult> _synchronizeSource(
+    String sourceId, {
+    DriveIndexProgressCallback? onProgress,
+    required bool retryFailedExtractions,
+  }) async {
     final startedAt = _clock().toUtc();
     final runId = _runIdFactory().trim();
     if (runId.isEmpty) {
@@ -123,7 +161,7 @@ class DriveMetadataIndexer {
         throw const _IndexSyncFailure('invalid_snapshot');
       }
 
-      totalCount = snapshot.records.length;
+      totalCount = snapshot.traversalComplete ? snapshot.records.length : null;
       final existingStories = await _repository.loadStoriesForSource(
         sourceType: sourceType,
         sourceId: sourceId,
@@ -133,80 +171,112 @@ class DriveMetadataIndexer {
         sourceId: sourceId,
       );
       final seenRemoteIds = <String>{};
+      // Validate identity across the snapshot before publishing any batch.
+      for (final record in snapshot.records) {
+        if (record.driveFileId.trim().isEmpty ||
+            record.title.trim().isEmpty ||
+            !seenRemoteIds.add(record.driveFileId.trim())) {
+          throw const _IndexSyncFailure('invalid_snapshot');
+        }
+      }
       final storiesToWrite = <SearchIndexStory>[];
       final unchangedRemoteIds = <String>[];
       final jobsToWrite = <SearchIndexJobUpdate>[];
       final indexedAt = _clock().toUtc();
       var allMetadataComplete = true;
+      var availableCount = existingStories.length;
 
-      for (final record in snapshot.records) {
-        final remoteId = record.driveFileId.trim();
-        if (remoteId.isEmpty || !seenRemoteIds.add(remoteId)) {
-          throw const _IndexSyncFailure('invalid_snapshot');
+      Future<void> publishBatch() async {
+        if (storiesToWrite.isEmpty &&
+            unchangedRemoteIds.isEmpty &&
+            jobsToWrite.isEmpty) {
+          return;
         }
-
-        final existing = existingStories[remoteId];
-        final sameRevision =
-            existing != null && _sameDriveRevision(existing, record);
-        final candidate = _storyFromRecord(
-          sourceId: sourceId,
-          runId: runId,
-          indexedAt: indexedAt,
-          record: record,
-          unchangedExisting: sameRevision ? existing : null,
-        );
-        final needsWrite =
-            existing == null || !_sameStoredMetadata(existing, candidate);
-        if (candidate.metadataStatus != SearchMetadataStatus.complete) {
-          allMetadataComplete = false;
+        final metadataChanged = storiesToWrite.isNotEmpty;
+        if (storiesToWrite.isNotEmpty) {
+          await _repository.upsertStories(storiesToWrite);
         }
-
-        if (needsWrite) {
-          storiesToWrite.add(candidate);
-        } else {
-          unchangedRemoteIds.add(remoteId);
-        }
-
-        final existingJob = existingJobs[remoteId];
-        final desiredJobStatus =
-            candidate.metadataStatus == SearchMetadataStatus.complete
-            ? SearchIndexJobStatus.complete
-            : SearchIndexJobStatus.pending;
-        if (needsWrite ||
-            existingJob == null ||
-            existingJob.status == SearchIndexJobStatus.running ||
-            existingJob.status != desiredJobStatus) {
-          jobsToWrite.add(
-            SearchIndexJobUpdate(
-              sourceType: sourceType,
-              sourceId: sourceId,
-              remoteId: remoteId,
-              driveFileId: remoteId,
-              status: desiredJobStatus,
-              updatedAt: indexedAt,
-            ),
+        writtenCount += storiesToWrite.length;
+        availableCount += storiesToWrite
+            .where((story) => !existingStories.containsKey(story.remoteId))
+            .length;
+        if (unchangedRemoteIds.isNotEmpty) {
+          await _repository.markStoriesSeen(
+            sourceType: sourceType,
+            sourceId: sourceId,
+            remoteIds: unchangedRemoteIds,
+            runId: runId,
           );
         }
+        unchangedCount += unchangedRemoteIds.length;
+        // A completed job must never precede its searchable metadata commit.
+        if (jobsToWrite.isNotEmpty) {
+          await _repository.upsertIndexJobs(jobsToWrite);
+        }
+        storiesToWrite.clear();
+        unchangedRemoteIds.clear();
+        jobsToWrite.clear();
+        onProgress?.call(
+          DriveIndexProgress(
+            indexedCount: availableCount,
+            totalCount: totalCount != null && totalCount >= availableCount
+                ? totalCount
+                : null,
+            metadataChanged: metadataChanged,
+          ),
+        );
       }
 
-      for (final batch in _batches(storiesToWrite)) {
-        await _repository.upsertStories(batch);
-        indexedCount += batch.length;
-        writtenCount += batch.length;
+      for (final records in _batches(snapshot.records, size: 2)) {
+        final prepared = await Future.wait([
+          for (final record in records)
+            _prepareRecord(
+              sourceId: sourceId,
+              runId: runId,
+              indexedAt: indexedAt,
+              record: record,
+              existing: existingStories[record.driveFileId.trim()],
+              existingJob: existingJobs[record.driveFileId.trim()],
+              retryFailedExtractions: retryFailedExtractions,
+            ),
+        ]);
+        for (final result in prepared) {
+          final candidate = result.story;
+          final remoteId = candidate.remoteId;
+          final existing = existingStories[remoteId];
+          final needsWrite =
+              existing == null || !_sameStoredMetadata(existing, candidate);
+          if (candidate.metadataStatus != SearchMetadataStatus.complete) {
+            allMetadataComplete = false;
+          }
+
+          if (needsWrite) {
+            storiesToWrite.add(candidate);
+          } else {
+            unchangedRemoteIds.add(remoteId);
+          }
+
+          final existingJob = existingJobs[remoteId];
+          final job = result.job;
+          if (job.status == SearchIndexJobStatus.error) warningCount++;
+          if (needsWrite ||
+              existingJob == null ||
+              existingJob.status == SearchIndexJobStatus.running ||
+              existingJob.status != job.status ||
+              existingJob.attempts != job.attempts ||
+              existingJob.errorCode != job.errorCode) {
+            jobsToWrite.add(job);
+          }
+        }
+        // Keep fast catalog writes batched; publish slow extraction results
+        // before starting the next network pair instead of buffering a root.
+        if (prepared.any((result) => result.didExtract) ||
+            storiesToWrite.length + unchangedRemoteIds.length >=
+                SearchIndexRepository.maxUpsertBatchSize) {
+          await publishBatch();
+        }
       }
-      for (final batch in _batches(unchangedRemoteIds)) {
-        await _repository.markStoriesSeen(
-          sourceType: sourceType,
-          sourceId: sourceId,
-          remoteIds: batch,
-          runId: runId,
-        );
-        indexedCount += batch.length;
-        unchangedCount += batch.length;
-      }
-      for (final batch in _batches(jobsToWrite)) {
-        await _repository.upsertIndexJobs(batch);
-      }
+      await publishBatch();
 
       if (snapshot.traversalComplete) {
         deletedCount = await _repository.deleteStoriesNotSeenInRun(
@@ -230,6 +300,10 @@ class DriveMetadataIndexer {
           ? 'metadata_partial'
           : null;
 
+      indexedCount = await _repository.countStories(
+        sourceType: sourceType,
+        sourceId: sourceId,
+      );
       await _repository.finishIndexRun(
         runId: runId,
         status: status,
@@ -254,7 +328,6 @@ class DriveMetadataIndexer {
       return _finishFailedRun(
         runId: runId,
         sourceId: sourceId,
-        indexedCount: indexedCount,
         totalCount: totalCount,
         writtenCount: writtenCount,
         unchangedCount: unchangedCount,
@@ -265,7 +338,6 @@ class DriveMetadataIndexer {
       return _finishFailedRun(
         runId: runId,
         sourceId: sourceId,
-        indexedCount: indexedCount,
         totalCount: totalCount,
         writtenCount: writtenCount,
         unchangedCount: unchangedCount,
@@ -278,18 +350,24 @@ class DriveMetadataIndexer {
   Future<DriveMetadataIndexResult> _finishFailedRun({
     required String runId,
     required String sourceId,
-    required int indexedCount,
     required int? totalCount,
     required int writtenCount,
     required int unchangedCount,
     required int warningCount,
     required String errorCode,
   }) async {
+    final availableCount = await _repository.countStories(
+      sourceType: sourceType,
+      sourceId: sourceId,
+    );
+    final knownTotal = totalCount != null && totalCount >= availableCount
+        ? totalCount
+        : null;
     await _repository.finishIndexRun(
       runId: runId,
       status: SearchIndexRunStatus.error,
-      indexedCount: indexedCount,
-      totalCount: totalCount,
+      indexedCount: availableCount,
+      totalCount: knownTotal,
       completedAt: _clock().toUtc(),
       errorCode: errorCode,
     );
@@ -297,13 +375,162 @@ class DriveMetadataIndexer {
       runId: runId,
       sourceId: sourceId,
       status: SearchIndexRunStatus.error,
-      indexedCount: indexedCount,
-      totalCount: totalCount,
+      indexedCount: availableCount,
+      totalCount: knownTotal,
       writtenCount: writtenCount,
       unchangedCount: unchangedCount,
       deletedCount: 0,
       warningCount: warningCount,
       errorCode: errorCode,
+    );
+  }
+
+  Future<_PreparedMetadata> _prepareRecord({
+    required String sourceId,
+    required String runId,
+    required DateTime indexedAt,
+    required DriveMetadataRecord record,
+    required SearchIndexStory? existing,
+    required SearchIndexJobUpdate? existingJob,
+    required bool retryFailedExtractions,
+  }) async {
+    final sameRevision =
+        existing != null && _sameDriveRevision(existing, record);
+    var candidate = _storyFromRecord(
+      sourceId: sourceId,
+      runId: runId,
+      indexedAt: indexedAt,
+      record: record,
+      unchangedExisting: sameRevision ? existing : null,
+    );
+    var status = candidate.metadataStatus == SearchMetadataStatus.complete
+        ? SearchIndexJobStatus.complete
+        : SearchIndexJobStatus.pending;
+    var attempts = sameRevision ? existingJob?.attempts ?? 0 : 0;
+    var didExtract = false;
+    String? errorCode;
+    final mimeType = record.mimeType.trim().toLowerCase();
+    final BookMetadataLoader? loader = switch (mimeType) {
+      'text/plain' => _txtMetadataLoader,
+      'application/epub+zip' => _epubMetadataLoader,
+      _ => null,
+    };
+    final failureCode = mimeType == 'text/plain'
+        ? 'txt_extraction_failed'
+        : 'epub_extraction_failed';
+    final hasRevision =
+        _trimToNull(record.checksum) != null || record.modifiedTime != null;
+    if (loader != null &&
+        status != SearchIndexJobStatus.complete &&
+        hasRevision) {
+      if (mimeType == 'application/epub+zip' &&
+          (record.fileSize ?? 0) > GoogleDriveService.epubMetadataMaxBytes) {
+        status = SearchIndexJobStatus.error;
+        errorCode = 'epub_size_limit';
+      } else if (sameRevision &&
+          existingJob?.status == SearchIndexJobStatus.complete) {
+        status = SearchIndexJobStatus.complete;
+      } else if (sameRevision &&
+          attempts >= maxExtractionAttempts &&
+          existingJob?.status != SearchIndexJobStatus.running &&
+          !(retryFailedExtractions &&
+              existingJob?.status == SearchIndexJobStatus.error &&
+              existingJob?.errorCode == failureCode)) {
+        status = SearchIndexJobStatus.error;
+        errorCode = failureCode;
+      } else {
+        // Keep cumulative attempts for manual retries: a finished failure
+        // must not reset the automatic budget. Interrupted-job recovery stays.
+        didExtract = true;
+        attempts++;
+        await _repository.upsertIndexJobs([
+          SearchIndexJobUpdate(
+            sourceType: sourceType,
+            sourceId: sourceId,
+            remoteId: candidate.remoteId,
+            driveFileId: candidate.driveFileId,
+            status: SearchIndexJobStatus.running,
+            attempts: attempts,
+            updatedAt: indexedAt,
+          ),
+        ]);
+        try {
+          final extracted = await loader(candidate.remoteId);
+          candidate = _mergeExtractedMetadata(candidate, record, extracted);
+          status = SearchIndexJobStatus.complete;
+        } catch (_) {
+          status = SearchIndexJobStatus.error;
+          errorCode = failureCode;
+        }
+      }
+    }
+    return _PreparedMetadata(
+      candidate,
+      SearchIndexJobUpdate(
+        sourceType: sourceType,
+        sourceId: sourceId,
+        remoteId: candidate.remoteId,
+        driveFileId: candidate.driveFileId,
+        status: status,
+        attempts: attempts,
+        errorCode: errorCode,
+        updatedAt: indexedAt,
+      ),
+      didExtract: didExtract,
+    );
+  }
+
+  static SearchIndexStory _mergeExtractedMetadata(
+    SearchIndexStory story,
+    DriveMetadataRecord record,
+    BookMetadata metadata,
+  ) {
+    final extractedTitle = _trimToNull(metadata.title);
+    final title =
+        record.origin == DriveMetadataOrigin.driveFile && extractedTitle != null
+        ? extractedTitle
+        : story.title;
+    final authors = story.authors.isEmpty
+        ? _canonicalLabels(metadata.authors)
+        : story.authors;
+    final genres = story.genres.isEmpty
+        ? _canonicalLabels(metadata.genres)
+        : story.genres;
+    final titleHasEvidence =
+        record.origin != DriveMetadataOrigin.driveFile ||
+        extractedTitle != null;
+    final complete =
+        titleHasEvidence && authors.isNotEmpty && genres.isNotEmpty;
+    final foundMetadata =
+        extractedTitle != null ||
+        authors.isNotEmpty ||
+        genres.isNotEmpty ||
+        metadata.description.isNotEmpty;
+    return SearchIndexStory(
+      sourceType: story.sourceType,
+      sourceId: story.sourceId,
+      remoteId: story.remoteId,
+      driveFileId: story.driveFileId,
+      title: title,
+      authors: authors,
+      genres: genres,
+      mimeType: story.mimeType,
+      modifiedTime: story.modifiedTime,
+      fileSize: story.fileSize,
+      checksum: story.checksum,
+      description: story.description.isNotEmpty
+          ? story.description
+          : metadata.description,
+      coverFileId: story.coverFileId,
+      coverUrl: story.coverUrl,
+      coverLocalPath: story.coverLocalPath,
+      lastIndexedAt: story.lastIndexedAt,
+      lastSeenRunId: story.lastSeenRunId,
+      metadataStatus: complete
+          ? SearchMetadataStatus.complete
+          : foundMetadata
+          ? SearchMetadataStatus.partial
+          : story.metadataStatus,
     );
   }
 
@@ -375,6 +602,10 @@ class DriveMetadataIndexer {
     SearchIndexStory existing,
     DriveMetadataRecord incoming,
   ) {
+    if (existing.mimeType.trim().toLowerCase() !=
+        incoming.mimeType.trim().toLowerCase()) {
+      return false;
+    }
     final incomingChecksum = _trimToNull(incoming.checksum);
     final existingChecksum = _trimToNull(existing.checksum);
     if (incomingChecksum != null && existingChecksum != null) {
@@ -453,16 +684,22 @@ class DriveMetadataIndexer {
     return trimmed == null || trimmed.isEmpty ? null : trimmed;
   }
 
-  static Iterable<List<T>> _batches<T>(List<T> values) sync* {
-    for (
-      var start = 0;
-      start < values.length;
-      start += SearchIndexRepository.maxUpsertBatchSize
-    ) {
-      final end = start + SearchIndexRepository.maxUpsertBatchSize;
+  static Iterable<List<T>> _batches<T>(
+    List<T> values, {
+    int size = SearchIndexRepository.maxUpsertBatchSize,
+  }) sync* {
+    for (var start = 0; start < values.length; start += size) {
+      final end = start + size;
       yield values.sublist(start, end > values.length ? values.length : end);
     }
   }
+}
+
+class _PreparedMetadata {
+  const _PreparedMetadata(this.story, this.job, {required this.didExtract});
+  final SearchIndexStory story;
+  final SearchIndexJobUpdate job;
+  final bool didExtract;
 }
 
 class _IndexSyncFailure implements Exception {
