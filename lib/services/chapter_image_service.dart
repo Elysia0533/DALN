@@ -1,12 +1,12 @@
 import 'dart:convert';
 
 import 'package:flutter/services.dart';
+import 'package:http/http.dart' as http;
 
 import 'google_drive_service.dart';
 
 class ChapterImageService {
   static const maxBytes = 16 * 1024 * 1024;
-  static const _channel = MethodChannel('com.vbook.reader/vbook_engine');
   static final _limiter = RequestConcurrencyLimiter(maxConcurrency: 2);
 
   static Future<Uint8List> load(
@@ -34,10 +34,13 @@ class ChapterImageService {
             uri.userInfo.isNotEmpty) {
           throw const FormatException();
         }
-        bytes = await _channel.invokeMethod<Uint8List>('getImageBytes', {
-          'url': uri.toString(),
-          'referer': referer,
-        });
+        final request = http.Request('GET', uri);
+        request.headers['Referer'] = referer;
+        request.headers['User-Agent'] = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
+        final response = await http.Client().send(request);
+        if (response.statusCode >= 200 && response.statusCode < 300) {
+          bytes = await response.stream.toBytes();
+        }
       }
       if (bytes == null || bytes.length > maxBytes) {
         throw const FormatException();

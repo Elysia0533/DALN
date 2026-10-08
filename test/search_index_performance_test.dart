@@ -77,8 +77,10 @@ void main() {
         ),
         isTrue,
       );
-      final indexedAt = (await repository.findByDriveFileId(
-        'file-4000',
+      final indexedAt = (await repository.findByIdentity(
+        sourceType: 'googleDrive',
+        sourceId: 'benchmark-root',
+        remoteId: 'file-4000',
       ))!.lastIndexedAt;
 
       await database.close();
@@ -92,7 +94,11 @@ void main() {
       expect(second.unchangedCount, 5000);
       expect(repository.batchSizes, isEmpty);
       expect(
-        (await repository.findByDriveFileId('file-4000'))!.lastIndexedAt,
+        (await repository.findByIdentity(
+          sourceType: 'googleDrive',
+          sourceId: 'benchmark-root',
+          remoteId: 'file-4000',
+        ))!.lastIndexedAt,
         indexedAt,
       );
 

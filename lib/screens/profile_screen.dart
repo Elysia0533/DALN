@@ -227,6 +227,43 @@ class ProfileScreen extends StatelessWidget {
                         : 'Đã có tài khoản? Đăng nhập',
                   ),
                 ),
+                if (isLogin) ...[
+                  const SizedBox(height: 16),
+                  const Divider(),
+                  const SizedBox(height: 8),
+                  OutlinedButton.icon(
+                    onPressed: isSubmitting || !isCloudReady
+                        ? null
+                        : () async {
+                            setDialogState(() {
+                              isSubmitting = true;
+                              errorText = null;
+                            });
+                            try {
+                              final provider = Provider.of<UserProvider>(
+                                context,
+                                listen: false,
+                              );
+                              await provider.loginWithGoogle(
+                                colorValue: selectedColor,
+                              );
+                              if (context.mounted) Navigator.pop(ctx);
+                            } catch (e) {
+                              if (context.mounted) {
+                                setDialogState(() {
+                                  isSubmitting = false;
+                                  errorText = e.toString().replaceFirst(
+                                    'Exception: ',
+                                    '',
+                                  );
+                                });
+                              }
+                            }
+                          },
+                    icon: const Icon(Icons.g_mobiledata, size: 28),
+                    label: const Text('Đăng nhập bằng Google'),
+                  ),
+                ],
               ],
             ),
           ),
@@ -907,7 +944,11 @@ class ProfileScreen extends StatelessWidget {
       context: context,
       builder: (ctx) => AlertDialog(
         title: const Text('Đăng xuất'),
-        content: const Text('Bạn có chắc muốn đăng xuất khỏi tài khoản này?'),
+        content: const Text(
+          'Bạn có chắc muốn đăng xuất khỏi tài khoản này?\n\n'
+          'Đăng xuất sẽ dừng đồng bộ tiến độ đọc và bookmark lên cloud. '
+          'Dữ liệu offline trên máy sẽ vẫn được giữ lại.',
+        ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(ctx),

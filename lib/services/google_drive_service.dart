@@ -6,11 +6,13 @@ import 'dart:typed_data' show BytesBuilder;
 
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
+import 'package:http_parser/http_parser.dart';
 
 import '../models/drive_metadata.dart';
 import '../models/search_index_story.dart';
 import '../models/story.dart';
 import 'app_identity_service.dart';
+import 'firebase_backend_service.dart';
 import 'search/drive_catalog_parser.dart';
 import '../utils/app_performance_logger.dart';
 
@@ -193,6 +195,100 @@ class GoogleDriveService {
     }
 
     return _scanFolderStories(rootFiles, requestApiKey: requestApiKey);
+  }
+
+  static Future<void> uploadCatalogToFolder(
+    String folderUrl,
+    List<Story> stories,
+  ) async {
+    final folderId = extractFolderId(folderUrl);
+    if (folderId == null) {
+      throw Exception('URL hoặc ID thư mục Google Drive không hợp lệ');
+    }
+    
+    final accessToken = await FirebaseBackendService.getGoogleDriveAccessToken();
+    if (accessToken == null) {
+      throw Exception('Không có quyền truy cập Google Drive. Vui lòng đăng nhập bằng Google.');
+    }
+
+    final catalogData = {
+      'stories': stories.map((s) => {
+        'id': s.id,
+        'title': s.title,
+        'author': s.author,
+        'description': s.description,
+        'iconUrl': s.iconUrl,
+        'totalChapters': s.totalChapters,
+        'genres': s.genres,
+        'driveFileId': s.driveFileId,
+        'url': s.storyUrl,
+        'pluginId': s.pluginId,
+      }).toList(),
+      'updatedAt': DateTime.now().toIso8601String(),
+    };
+    
+    final jsonString = jsonEncode(catalogData);
+    final utf8Bytes = utf8.encode(jsonString);
+
+    // 1. Check if catalog.vbook.json already exists
+    final rootFiles = await _listChildren(
+      folderId,
+      requestApiKey: await _requireApiKey(),
+    );
+    final existingFile = _findCatalogFile(rootFiles);
+
+    final client = http.Client();
+    try {
+      if (existingFile != null) {
+        // Update existing file
+        final updateUrl = Uri.parse('https://www.googleapis.com/upload/drive/v3/files/${existingFile.id}?uploadType=media&supportsAllDrives=true');
+        final response = await client.patch(
+          updateUrl,
+          headers: {
+            'Authorization': 'Bearer $accessToken',
+            'Content-Type': 'application/json',
+          },
+          body: utf8Bytes,
+        );
+        if (response.statusCode != 200) {
+          throw Exception('Lỗi cập nhật catalog: ${response.body}');
+        }
+      } else {
+        // Create new file
+        final createUrl = Uri.parse('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&supportsAllDrives=true');
+        
+        final request = http.MultipartRequest('POST', createUrl);
+        request.headers['Authorization'] = 'Bearer $accessToken';
+        
+        final metadata = {
+          'name': 'catalog.vbook.json',
+          'parents': [folderId],
+          'mimeType': 'application/json',
+        };
+        request.files.add(
+          http.MultipartFile.fromString(
+            'metadata',
+            jsonEncode(metadata),
+            contentType: MediaType('application', 'json'),
+          ),
+        );
+        request.files.add(
+          http.MultipartFile.fromBytes(
+            'file',
+            utf8Bytes,
+            contentType: MediaType('application', 'json'),
+          ),
+        );
+
+        final response = await client.send(request);
+        if (response.statusCode != 200) {
+          final resBody = await response.stream.bytesToString();
+          throw Exception('Lỗi tạo catalog: $resBody');
+        }
+      }
+    } finally {
+      client.close();
+    }
   }
 
   static List<String> parseFolderInputs(String value) {

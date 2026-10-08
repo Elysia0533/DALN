@@ -164,7 +164,14 @@ void main() {
     expect(result.deletedCount, 0);
     expect(updates, isEmpty);
     expect(await repository.countStories(), 1);
-    expect(await repository.findByDriveFileId('original'), isNotNull);
+    expect(
+      await repository.findByIdentity(
+        sourceType: 'googleDrive',
+        sourceId: 'root',
+        remoteId: 'original',
+      ),
+      isNotNull,
+    );
   });
 
   test(
@@ -228,7 +235,14 @@ void main() {
       expect(failed.indexedCount, 3);
       expect(failed.deletedCount, 0);
       expect(updates.single.indexedCount, 3);
-      expect(await repository.findByDriveFileId('old'), isNotNull);
+      expect(
+        await repository.findByIdentity(
+          sourceType: 'googleDrive',
+          sourceId: 'root',
+          remoteId: 'old',
+        ),
+        isNotNull,
+      );
       await database.close();
       repository = SearchIndexRepository(database);
       final resumed = await indexer(epub: extract).synchronizeFolder('root');

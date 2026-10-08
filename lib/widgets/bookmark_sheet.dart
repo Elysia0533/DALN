@@ -76,47 +76,52 @@ class _BookmarkSheetState extends State<BookmarkSheet> {
             child: _isLoading
                 ? const Center(child: CircularProgressIndicator())
                 : _bookmarks.isEmpty
-                    ? Center(
-                        child: Text(
-                          'Chưa có bookmark nào.',
-                          style: TextStyle(color: textColor.withValues(alpha: 0.6)),
+                ? Center(
+                    child: Text(
+                      'Chưa có bookmark nào.',
+                      style: TextStyle(color: textColor.withValues(alpha: 0.6)),
+                    ),
+                  )
+                : ListView.builder(
+                    itemCount: _bookmarks.length,
+                    itemBuilder: (context, index) {
+                      final bm = _bookmarks[index];
+                      return ListTile(
+                        contentPadding: EdgeInsets.zero,
+                        title: Text(
+                          bm.selectedText.isNotEmpty
+                              ? '"${bm.selectedText}"'
+                              : bm.chapterTitle.isNotEmpty
+                              ? bm.chapterTitle
+                              : 'Bookmark ${index + 1}',
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(color: textColor),
                         ),
-                      )
-                    : ListView.builder(
-                        itemCount: _bookmarks.length,
-                        itemBuilder: (context, index) {
-                          final bm = _bookmarks[index];
-                          return ListTile(
-                            contentPadding: EdgeInsets.zero,
-                            title: Text(
-                              bm.selectedText.isNotEmpty
-                                  ? '"${bm.selectedText}"'
-                                  : bm.chapterTitle.isNotEmpty
-                                      ? bm.chapterTitle
-                                      : 'Bookmark ${index + 1}',
-                              maxLines: 2,
-                              overflow: TextOverflow.ellipsis,
-                              style: TextStyle(color: textColor),
-                            ),
-                            subtitle: Text(
-                              'Chương ${bm.chapterIndex + 1} • ${(bm.scrollPercentage * 100).toStringAsFixed(1)}%',
-                              style: TextStyle(
-                                color: textColor.withValues(alpha: 0.6),
-                                fontSize: 12,
-                              ),
-                            ),
-                            trailing: IconButton(
-                              icon: const Icon(Icons.delete_outline, color: Colors.red),
-                              onPressed: () async {
-                                await BookmarkService.removeBookmark(
-                                    widget.storyId, bm.id);
-                                _loadBookmarks();
-                              },
-                            ),
-                            onTap: () => widget.onBookmarkSelected(bm),
-                          );
-                        },
-                      ),
+                        subtitle: Text(
+                          'Chương ${bm.chapterIndex + 1} • ${(bm.scrollPercentage * 100).toStringAsFixed(1)}%',
+                          style: TextStyle(
+                            color: textColor.withValues(alpha: 0.6),
+                            fontSize: 12,
+                          ),
+                        ),
+                        trailing: IconButton(
+                          icon: const Icon(
+                            Icons.delete_outline,
+                            color: Colors.red,
+                          ),
+                          onPressed: () async {
+                            await BookmarkService.removeBookmark(
+                              widget.storyId,
+                              bm.id,
+                            );
+                            _loadBookmarks();
+                          },
+                        ),
+                        onTap: () => widget.onBookmarkSelected(bm),
+                      );
+                    },
+                  ),
           ),
         ],
       ),

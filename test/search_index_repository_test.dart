@@ -37,7 +37,7 @@ void main() {
     () async {
       final database = await databaseService.database;
 
-      expect(await database.getVersion(), 1);
+      expect(await database.getVersion(), 2);
       final tableRows = await database.rawQuery(
         "SELECT name FROM sqlite_master WHERE type = 'table'",
       );
@@ -127,7 +127,11 @@ void main() {
         ),
       ]);
 
-      final story = await repository.findByDriveFileId('drive-1');
+      final story = await repository.findByIdentity(
+        sourceType: 'googleDrive',
+        sourceId: 'drive-root',
+        remoteId: 'story-1',
+      );
       expect(story, isNotNull);
       expect(story!.title, 'Mắt Biếc');
       expect(story.modifiedTime, modifiedTime);
@@ -191,7 +195,11 @@ void main() {
         genres: const ['Genre A'],
       ),
     ]);
-    final original = await repository.findByDriveFileId('drive-1');
+    final original = await repository.findByIdentity(
+      sourceType: 'googleDrive',
+      sourceId: 'drive-root',
+      remoteId: 'story-1',
+    );
 
     await repository.upsertStories([
       _story(
@@ -202,7 +210,11 @@ void main() {
         genres: const ['Genre B', 'Genre C'],
       ),
     ]);
-    final updated = await repository.findByDriveFileId('drive-1');
+    final updated = await repository.findByIdentity(
+      sourceType: 'googleDrive',
+      sourceId: 'drive-root',
+      remoteId: 'story-1',
+    );
 
     expect(updated, isNotNull);
     expect(updated!.databaseId, original!.databaseId);
@@ -210,38 +222,6 @@ void main() {
     expect(updated.authors, const ['Author B']);
     expect(updated.genres, const ['Genre B', 'Genre C']);
     expect(await repository.countStories(), 1);
-  });
-
-  test('unique Drive conflict rolls back every story in the batch', () async {
-    await repository.upsertStories([
-      _story(remoteId: 'existing', driveFileId: 'drive-1', title: 'Existing'),
-    ]);
-
-    await expectLater(
-      repository.upsertStories([
-        _story(
-          remoteId: 'new-valid',
-          driveFileId: 'drive-2',
-          title: 'Should roll back',
-        ),
-        _story(
-          remoteId: 'new-conflict',
-          driveFileId: 'drive-1',
-          title: 'Conflicting Drive identity',
-        ),
-      ]),
-      throwsA(isA<DatabaseException>()),
-    );
-
-    expect(await repository.countStories(), 1);
-    expect(
-      await repository.findByIdentity(
-        sourceType: 'googleDrive',
-        sourceId: 'drive-root',
-        remoteId: 'new-valid',
-      ),
-      isNull,
-    );
   });
 
   test('invalid metadata is rejected before any batch write', () async {
@@ -577,11 +557,183 @@ void main() {
 
       databaseService = _testDatabaseService(databasePath);
       repository = SearchIndexRepository(databaseService);
-      final restored = await repository.findByDriveFileId('drive-1');
+      final restored = await repository.findByIdentity(
+        sourceType: 'googleDrive',
+        sourceId: 'drive-root',
+        remoteId: 'story-1',
+      );
 
       expect(restored?.title, 'Persistent story');
       expect(restored?.authors, const ['Persistent author']);
-      expect(await (await databaseService.database).getVersion(), 1);
+      expect(await (await databaseService.database).getVersion(), 2);
+    },
+  );
+
+  test(
+    'cross-source search deduplicates same driveFileId across roots',
+    () async {
+      // Insert the same Drive file in two different roots with different
+      // metadata quality.
+      await repository.upsertStories([
+        _story(
+          sourceId: 'root-a',
+          remoteId: 'shared-file',
+          driveFileId: 'drive-shared',
+          title: 'Book from Root A',
+          authors: const ['Author A'],
+          genres: const ['Genre A'],
+        ),
+      ]);
+      // Root B has the same driveFileId but with complete metadata.
+      await repository.upsertStories([
+        SearchIndexStory(
+          sourceType: 'googleDrive',
+          sourceId: 'root-b',
+          remoteId: 'shared-file',
+          driveFileId: 'drive-shared',
+          title: 'Book from Root B (better)',
+          mimeType: 'application/epub+zip',
+          description: 'Full description',
+          metadataStatus: SearchMetadataStatus.complete,
+          lastIndexedAt: DateTime.utc(2026, 9, 5),
+          authors: const ['Author B'],
+          genres: const ['Genre B'],
+        ),
+      ]);
+
+      // Both records exist in the database.
+      expect(await repository.countStories(), 2);
+
+      // Cross-source search (no sourceType/sourceId) should deduplicate.
+      final crossResults = await repository.searchByKeyword(query: 'book');
+      expect(crossResults.items, hasLength(1));
+      expect(crossResults.items.first.title, 'Book from Root B (better)');
+      expect(
+        crossResults.items.first.metadataStatus,
+        SearchMetadataStatus.complete,
+      );
+
+      // Root-scoped search should NOT deduplicate — returns exactly one hit.
+      final rootAResults = await repository.searchByKeyword(
+        query: 'book',
+        sourceType: 'googleDrive',
+        sourceId: 'root-a',
+      );
+      expect(rootAResults.items, hasLength(1));
+      expect(rootAResults.items.first.title, 'Book from Root A');
+
+      final rootBResults = await repository.searchByKeyword(
+        query: 'book',
+        sourceType: 'googleDrive',
+        sourceId: 'root-b',
+      );
+      expect(rootBResults.items, hasLength(1));
+      expect(rootBResults.items.first.title, 'Book from Root B (better)');
+    },
+  );
+
+  test(
+    'dedup keeps record with better metadata when driveFileId overlaps',
+    () async {
+      // Root A has partial metadata.
+      await repository.upsertStories([
+        _story(
+          sourceId: 'root-a',
+          remoteId: 'overlap-file',
+          driveFileId: 'drive-overlap',
+          title: 'Overlap',
+          lastIndexedAt: DateTime.utc(2026, 9, 10),
+        ),
+      ]);
+      // Root B has partial metadata but older timestamp.
+      await repository.upsertStories([
+        _story(
+          sourceId: 'root-b',
+          remoteId: 'overlap-file',
+          driveFileId: 'drive-overlap',
+          title: 'Overlap',
+          lastIndexedAt: DateTime.utc(2026, 9, 1),
+        ),
+      ]);
+
+      // Both have same metadata_status (partial); root-a has newer timestamp.
+      final results = await repository.searchByKeyword(query: 'overlap');
+      expect(results.items, hasLength(1));
+      expect(results.items.first.sourceId, 'root-a');
+    },
+  );
+
+  test(
+    'records without driveFileId are never deduplicated',
+    () async {
+      await repository.upsertStories([
+        _story(
+          sourceType: 'local',
+          sourceId: 'device',
+          remoteId: 'local-1',
+          driveFileId: null,
+          title: 'Local Book A',
+        ),
+        _story(
+          sourceType: 'local',
+          sourceId: 'device',
+          remoteId: 'local-2',
+          driveFileId: null,
+          title: 'Local Book B',
+        ),
+      ]);
+
+      final results = await repository.searchByKeyword(query: 'local book');
+      expect(results.items, hasLength(2));
+    },
+  );
+
+  test(
+    'deleting one root does not affect another root with same driveFileId',
+    () async {
+      await repository.upsertStories([
+        _story(
+          sourceId: 'root-x',
+          remoteId: 'shared-x',
+          driveFileId: 'drive-xy',
+          title: 'Shared XY',
+        ),
+      ]);
+      await repository.upsertStories([
+        _story(
+          sourceId: 'root-y',
+          remoteId: 'shared-y',
+          driveFileId: 'drive-xy',
+          title: 'Shared XY',
+        ),
+      ]);
+
+      // Simulate root-x reconciliation removing its record.
+      await repository.startIndexRun(SearchIndexRunRecord(
+        runId: 'cleanup-x',
+        sourceType: 'googleDrive',
+        sourceId: 'root-x',
+        status: SearchIndexRunStatus.indexing,
+        indexedCount: 0,
+        startedAt: DateTime.utc(2026, 9, 11),
+      ));
+      // No stories seen in this run → all root-x stories get deleted.
+      final deleted = await repository.deleteStoriesNotSeenInRun(
+        sourceType: 'googleDrive',
+        sourceId: 'root-x',
+        runId: 'cleanup-x',
+      );
+      expect(deleted, 1);
+
+      // Root-y record survives.
+      expect(await repository.countStories(), 1);
+      final surviving = await repository.findByIdentity(
+        sourceType: 'googleDrive',
+        sourceId: 'root-y',
+        remoteId: 'shared-y',
+      );
+      expect(surviving, isNotNull);
+      expect(surviving!.title, 'Shared XY');
     },
   );
 }

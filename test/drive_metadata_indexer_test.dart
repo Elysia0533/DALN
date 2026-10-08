@@ -94,7 +94,11 @@ void main() {
     snapshot = _snapshot([_record(id: 'story-1', title: 'Story')]);
     final indexer = createIndexer();
     await indexer.synchronizeFolder('root');
-    final firstStory = await repository.findByDriveFileId('story-1');
+    final firstStory = await repository.findByIdentity(
+      sourceType: 'googleDrive',
+      sourceId: 'root',
+      remoteId: 'story-1',
+    );
     final firstJobs = await repository.loadIndexJobsForSource(
       sourceType: DriveMetadataIndexer.sourceType,
       sourceId: 'root',
@@ -102,7 +106,11 @@ void main() {
 
     now = DateTime.utc(2026, 9, 2);
     final second = await indexer.synchronizeFolder('root');
-    final secondStory = await repository.findByDriveFileId('story-1');
+    final secondStory = await repository.findByIdentity(
+      sourceType: 'googleDrive',
+      sourceId: 'root',
+      remoteId: 'story-1',
+    );
     final secondJobs = await repository.loadIndexJobsForSource(
       sourceType: DriveMetadataIndexer.sourceType,
       sourceId: 'root',
@@ -131,7 +139,11 @@ void main() {
         ),
       ]);
       final result = await indexer.synchronizeFolder('root');
-      final story = await repository.findByDriveFileId('story-1');
+      final story = await repository.findByIdentity(
+        sourceType: 'googleDrive',
+        sourceId: 'root',
+        remoteId: 'story-1',
+      );
 
       expect(result.writtenCount, 1);
       expect(result.unchangedCount, 0);
@@ -157,7 +169,14 @@ void main() {
     );
 
     expect(result.deletedCount, 1);
-    expect(await repository.findByDriveFileId('story-1'), isNull);
+    expect(
+      await repository.findByIdentity(
+        sourceType: 'googleDrive',
+        sourceId: 'root',
+        remoteId: 'story-1',
+      ),
+      isNull,
+    );
     expect(await repository.countStories(), 1);
     expect(jobs.keys, const ['story-2']);
   });
@@ -216,7 +235,11 @@ void main() {
         ),
       ]);
       final result = await indexer.synchronizeFolder('root');
-      final story = await repository.findByDriveFileId('story-1');
+      final story = await repository.findByIdentity(
+        sourceType: 'googleDrive',
+        sourceId: 'root',
+        remoteId: 'story-1',
+      );
 
       expect(result.status, SearchIndexRunStatus.ready);
       expect(result.writtenCount, 0);

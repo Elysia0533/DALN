@@ -34,22 +34,28 @@ class _BookmarksScreenState extends State<BookmarksScreen> {
     final apiMarkers = await ApiService.getReadingBookmarks();
     final localStories = await ApiService.fetchPersonalStories();
 
-    final convertedMarkers = apiMarkers.map((m) => Bookmark(
-      id: m.id,
-      storyId: m.storyId,
-      storyTitle: m.storyTitle,
-      chapterIndex: m.chapterIndex,
-      paragraphIndex: m.paragraphIndex,
-      chapterTitle: m.chapterTitle,
-      selectedText: m.snippet,
-      scrollOffset: m.scrollOffset,
-      createdAt: m.createdAt,
-    )).toList();
+    final convertedMarkers = apiMarkers
+        .map(
+          (m) => Bookmark(
+            id: m.id,
+            storyId: m.storyId,
+            storyTitle: m.storyTitle,
+            chapterIndex: m.chapterIndex,
+            paragraphIndex: m.paragraphIndex,
+            chapterTitle: m.chapterTitle,
+            selectedText: m.snippet,
+            scrollOffset: m.scrollOffset,
+            createdAt: m.createdAt,
+          ),
+        )
+        .toList();
 
     final seenIds = <String>{};
     final combined = <Bookmark>[];
     for (final b in [...convertedMarkers, ...legacyBookmarks]) {
-      final key = b.id.isNotEmpty ? b.id : '${b.storyId}_${b.chapterIndex}_${b.paragraphIndex}';
+      final key = b.id.isNotEmpty
+          ? b.id
+          : '${b.storyId}_${b.chapterIndex}_${b.paragraphIndex}';
       if (seenIds.add(key)) {
         combined.add(b);
       }
@@ -72,9 +78,9 @@ class _BookmarksScreenState extends State<BookmarksScreen> {
       _bookmarks.removeWhere((b) => b.id == bookmark.id);
     });
     if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('Đã xoá dấu trang')),
-    );
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(const SnackBar(content: Text('Đã xoá dấu trang')));
   }
 
   Future<void> _openBookmark(Bookmark bookmark) async {
@@ -104,7 +110,9 @@ class _BookmarksScreenState extends State<BookmarksScreen> {
             builder: (context) => OnlineChapterReaderScreen(
               plugin: plugin,
               chapterUrl: story.storyUrl,
-              chapterTitle: bookmark.chapterTitle.isNotEmpty ? bookmark.chapterTitle : 'Chương ${bookmark.chapterIndex + 1}',
+              chapterTitle: bookmark.chapterTitle.isNotEmpty
+                  ? bookmark.chapterTitle
+                  : 'Chương ${bookmark.chapterIndex + 1}',
               storyTitle: story.title,
               currentIndex: bookmark.chapterIndex,
             ),
@@ -146,7 +154,11 @@ class _BookmarksScreenState extends State<BookmarksScreen> {
       }
     } catch (e) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Không tìm thấy truyện trong thiết bị. Vui lòng tải lại truyện.')),
+        const SnackBar(
+          content: Text(
+            'Không tìm thấy truyện trong thiết bị. Vui lòng tải lại truyện.',
+          ),
+        ),
       );
     }
   }
@@ -156,49 +168,76 @@ class _BookmarksScreenState extends State<BookmarksScreen> {
     final isDark = Theme.of(context).brightness == Brightness.dark;
 
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('Dấu trang của tôi'),
-      ),
+      appBar: AppBar(title: const Text('Dấu trang của tôi')),
       body: _isLoading
           ? const Center(child: CircularProgressIndicator())
           : _bookmarks.isEmpty
-              ? Center(
-                  child: Column(
-                    mainAxisAlignment: MainAxisAlignment.center,
+          ? Center(
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Icon(
+                    Icons.bookmark_outline,
+                    size: 64,
+                    color: isDark ? Colors.grey.shade600 : Colors.grey.shade400,
+                  ),
+                  const SizedBox(height: 16),
+                  Text(
+                    'Bạn chưa có dấu trang nào',
+                    style: TextStyle(
+                      color: isDark
+                          ? Colors.grey.shade400
+                          : Colors.grey.shade600,
+                    ),
+                  ),
+                ],
+              ),
+            )
+          : ListView.builder(
+              itemCount: _bookmarks.length,
+              itemBuilder: (context, index) {
+                final bookmark = _bookmarks[index];
+                final chapterText = bookmark.chapterTitle.isNotEmpty
+                    ? bookmark.chapterTitle
+                    : 'Chương ${bookmark.chapterIndex + 1}';
+                return ListTile(
+                  leading: Icon(
+                    Icons.bookmark,
+                    color: Color(bookmark.colorValue),
+                  ),
+                  title: Text(
+                    bookmark.storyTitle.isNotEmpty
+                        ? bookmark.storyTitle
+                        : 'Truyện không tên',
+                  ),
+                  subtitle: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Icon(Icons.bookmark_outline, size: 64, color: isDark ? Colors.grey.shade600 : Colors.grey.shade400),
-                      const SizedBox(height: 16),
-                      Text('Bạn chưa có dấu trang nào', style: TextStyle(color: isDark ? Colors.grey.shade400 : Colors.grey.shade600)),
+                      Text(
+                        '$chapterText • Đoạn ${bookmark.paragraphIndex + 1}',
+                        style: const TextStyle(
+                          fontWeight: FontWeight.bold,
+                          fontSize: 13,
+                        ),
+                      ),
+                      if (bookmark.selectedText.isNotEmpty)
+                        Text(
+                          '"${bookmark.selectedText}"',
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(fontStyle: FontStyle.italic),
+                        ),
                     ],
                   ),
-                )
-              : ListView.builder(
-                  itemCount: _bookmarks.length,
-                  itemBuilder: (context, index) {
-                    final bookmark = _bookmarks[index];
-                    final chapterText = bookmark.chapterTitle.isNotEmpty
-                        ? bookmark.chapterTitle
-                        : 'Chương ${bookmark.chapterIndex + 1}';
-                    return ListTile(
-                      leading: Icon(Icons.bookmark, color: Color(bookmark.colorValue)),
-                      title: Text(bookmark.storyTitle.isNotEmpty ? bookmark.storyTitle : 'Truyện không tên'),
-                      subtitle: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text('$chapterText • Đoạn ${bookmark.paragraphIndex + 1}', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
-                          if (bookmark.selectedText.isNotEmpty)
-                            Text('"${bookmark.selectedText}"', maxLines: 2, overflow: TextOverflow.ellipsis, style: const TextStyle(fontStyle: FontStyle.italic)),
-                        ],
-                      ),
-                      isThreeLine: bookmark.selectedText.isNotEmpty,
-                      trailing: IconButton(
-                        icon: const Icon(Icons.delete_outline),
-                        onPressed: () => _deleteBookmark(bookmark),
-                      ),
-                      onTap: () => _openBookmark(bookmark),
-                    );
-                  },
-                ),
+                  isThreeLine: bookmark.selectedText.isNotEmpty,
+                  trailing: IconButton(
+                    icon: const Icon(Icons.delete_outline),
+                    onPressed: () => _deleteBookmark(bookmark),
+                  ),
+                  onTap: () => _openBookmark(bookmark),
+                );
+              },
+            ),
     );
   }
 }

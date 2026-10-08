@@ -2,11 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 typedef ReaderTextAction = void Function(String selectedText);
-typedef ReaderSelectionAction = void Function(
-  String selectedText,
-  int selectionStart,
-  int selectionEnd,
-);
+typedef ReaderSelectionAction =
+    void Function(String selectedText, int selectionStart, int selectionEnd);
 
 class ReaderSelectableText extends StatelessWidget {
   final String text;

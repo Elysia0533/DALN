@@ -6,7 +6,7 @@ class ReadingProgress {
   final int chapterIndex;
   final double scrollOffset;
   final double scrollPercentage; // 0.0 - 1.0
-  final String lastVisibleText;  // Đoạn text đầu tiên hiện trên màn hình
+  final String lastVisibleText; // Đoạn text đầu tiên hiện trên màn hình
   final int totalChapters;
   final DateTime updatedAt;
 
@@ -61,10 +61,10 @@ class Bookmark {
   final String chapterTitle;
   final double scrollOffset;
   final double scrollPercentage;
-  final String selectedText;  // Đoạn text người dùng chọn
-  final String note;          // Ghi chú tùy chọn
+  final String selectedText; // Đoạn text người dùng chọn
+  final String note; // Ghi chú tùy chọn
   final DateTime createdAt;
-  final int colorValue;       // Màu highlight (argb int)
+  final int colorValue; // Màu highlight (argb int)
 
   Bookmark({
     required this.id,
@@ -81,24 +81,21 @@ class Bookmark {
     this.colorValue = 0xFFFFC107, // Amber mặc định
   }) : createdAt = createdAt ?? DateTime.now();
 
-  Bookmark copyWith({
-    String? note,
-    int? colorValue,
-    int? paragraphIndex,
-  }) => Bookmark(
-    id: id,
-    storyId: storyId,
-    storyTitle: storyTitle,
-    chapterIndex: chapterIndex,
-    paragraphIndex: paragraphIndex ?? this.paragraphIndex,
-    chapterTitle: chapterTitle,
-    scrollOffset: scrollOffset,
-    scrollPercentage: scrollPercentage,
-    selectedText: selectedText,
-    note: note ?? this.note,
-    createdAt: createdAt,
-    colorValue: colorValue ?? this.colorValue,
-  );
+  Bookmark copyWith({String? note, int? colorValue, int? paragraphIndex}) =>
+      Bookmark(
+        id: id,
+        storyId: storyId,
+        storyTitle: storyTitle,
+        chapterIndex: chapterIndex,
+        paragraphIndex: paragraphIndex ?? this.paragraphIndex,
+        chapterTitle: chapterTitle,
+        scrollOffset: scrollOffset,
+        scrollPercentage: scrollPercentage,
+        selectedText: selectedText,
+        note: note ?? this.note,
+        createdAt: createdAt,
+        colorValue: colorValue ?? this.colorValue,
+      );
 
   Map<String, dynamic> toJson() => {
     'id': id,

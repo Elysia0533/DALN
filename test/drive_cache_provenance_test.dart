@@ -145,7 +145,11 @@ void main() {
       (await repository.searchByAuthor('Current')).items.single.title,
       'Current extracted title',
     );
-    final stored = await repository.findByDriveFileId('story');
+    final stored = await repository.findByIdentity(
+      sourceType: 'googleDrive',
+      sourceId: 'root',
+      remoteId: 'story',
+    );
     expect(stored!.checksum, 'revision-two');
 
     await database.close();
@@ -156,7 +160,11 @@ void main() {
     expect(repeated.unchangedCount, 1);
     expect(extractionCalls, 1);
     expect(
-      (await repository.findByDriveFileId('story'))!.lastIndexedAt,
+      (await repository.findByIdentity(
+        sourceType: 'googleDrive',
+        sourceId: 'root',
+        remoteId: 'story',
+      ))!.lastIndexedAt,
       stored.lastIndexedAt,
     );
   });
@@ -172,7 +180,11 @@ void main() {
     final result = await indexer().synchronizeFolder('root');
     expect(result.status, SearchIndexRunStatus.partial);
     expect(extractionCalls, 0);
-    final stored = await repository.findByDriveFileId('story');
+    final stored = await repository.findByIdentity(
+      sourceType: 'googleDrive',
+      sourceId: 'root',
+      remoteId: 'story',
+    );
     expect(stored!.checksum, isNull);
     expect(stored.modifiedTime, isNull);
     expect(stored.fileSize, isNull);

@@ -11,7 +11,8 @@ class BackgroundDownloadBanner extends StatelessWidget {
       listenable: OfflineDownloadService.instance,
       builder: (context, _) {
         final service = OfflineDownloadService.instance;
-        if (service.status != DownloadStatus.downloading && service.status != DownloadStatus.error) {
+        if (service.status != DownloadStatus.downloading &&
+            service.status != DownloadStatus.error) {
           return const SizedBox.shrink();
         }
 
@@ -23,7 +24,9 @@ class BackgroundDownloadBanner extends StatelessWidget {
           width: double.infinity,
           margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
           child: Material(
-            color: isError ? colorScheme.errorContainer : colorScheme.primaryContainer,
+            color: isError
+                ? colorScheme.errorContainer
+                : colorScheme.primaryContainer,
             borderRadius: BorderRadius.circular(12),
             elevation: 3,
             child: InkWell(
@@ -31,20 +34,31 @@ class BackgroundDownloadBanner extends StatelessWidget {
               onTap: () {
                 Navigator.push(
                   context,
-                  MaterialPageRoute(builder: (_) => const DownloadManagerScreen()),
+                  MaterialPageRoute(
+                    builder: (_) => const DownloadManagerScreen(),
+                  ),
                 );
               },
               child: Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 14,
+                  vertical: 10,
+                ),
                 child: Row(
                   children: [
                     SizedBox(
                       width: 22,
                       height: 22,
                       child: isError
-                          ? Icon(Icons.error_outline_rounded, color: colorScheme.onErrorContainer, size: 22)
+                          ? Icon(
+                              Icons.error_outline_rounded,
+                              color: colorScheme.onErrorContainer,
+                              size: 22,
+                            )
                           : CircularProgressIndicator(
-                              value: service.progress > 0 ? service.progress : null,
+                              value: service.progress > 0
+                                  ? service.progress
+                                  : null,
                               strokeWidth: 2.5,
                               color: colorScheme.onPrimaryContainer,
                             ),
@@ -61,7 +75,9 @@ class BackgroundDownloadBanner extends StatelessWidget {
                             style: TextStyle(
                               fontSize: 13,
                               fontWeight: FontWeight.bold,
-                              color: isError ? colorScheme.onErrorContainer : colorScheme.onPrimaryContainer,
+                              color: isError
+                                  ? colorScheme.onErrorContainer
+                                  : colorScheme.onPrimaryContainer,
                             ),
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
@@ -73,8 +89,12 @@ class BackgroundDownloadBanner extends StatelessWidget {
                             style: TextStyle(
                               fontSize: 11,
                               color: isError
-                                  ? colorScheme.onErrorContainer.withValues(alpha: 0.8)
-                                  : colorScheme.onPrimaryContainer.withValues(alpha: 0.8),
+                                  ? colorScheme.onErrorContainer.withValues(
+                                      alpha: 0.8,
+                                    )
+                                  : colorScheme.onPrimaryContainer.withValues(
+                                      alpha: 0.8,
+                                    ),
                             ),
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
@@ -86,13 +106,17 @@ class BackgroundDownloadBanner extends StatelessWidget {
                       icon: Icon(
                         isError ? Icons.refresh : Icons.stop_circle_outlined,
                         size: 22,
-                        color: isError ? colorScheme.onErrorContainer : Colors.red,
+                        color: isError
+                            ? colorScheme.onErrorContainer
+                            : Colors.red,
                       ),
                       tooltip: isError ? 'Mở trang tải' : 'Hủy tải ngầm',
                       onPressed: () {
                         Navigator.push(
                           context,
-                          MaterialPageRoute(builder: (_) => const DownloadManagerScreen()),
+                          MaterialPageRoute(
+                            builder: (_) => const DownloadManagerScreen(),
+                          ),
                         );
                       },
                     ),

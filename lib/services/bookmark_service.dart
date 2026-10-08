@@ -6,8 +6,8 @@ import '../models/reading_progress.dart';
 
 /// Service quản lý lưu tiến độ đọc và bookmarks
 class BookmarkService {
-  static const String _progressPrefix = 'rp_';     // reading progress
-  static const String _bookmarkPrefix = 'bm_';     // bookmarks per story
+  static const String _progressPrefix = 'rp_'; // reading progress
+  static const String _bookmarkPrefix = 'bm_'; // bookmarks per story
   static const String _allBookmarksKey = 'all_bookmark_story_ids';
   static final Map<String, Timer> _saveTimers = {};
 
@@ -89,7 +89,9 @@ class BookmarkService {
       final encoded = prefs.getString('$_bookmarkPrefix$storyId');
       if (encoded == null || encoded.isEmpty) return [];
       final List<dynamic> list = json.decode(encoded);
-      return list.map((e) => Bookmark.fromJson(e as Map<String, dynamic>)).toList();
+      return list
+          .map((e) => Bookmark.fromJson(e as Map<String, dynamic>))
+          .toList();
     } catch (e) {
       debugPrint('BookmarkService: Không thể đọc bookmarks: $e');
       return [];
@@ -168,7 +170,10 @@ class BookmarkService {
     await prefs.setString('$_bookmarkPrefix$storyId', encoded);
   }
 
-  static Future<void> _trackStoryId(SharedPreferences prefs, String storyId) async {
+  static Future<void> _trackStoryId(
+    SharedPreferences prefs,
+    String storyId,
+  ) async {
     final ids = prefs.getStringList(_allBookmarksKey) ?? [];
     if (!ids.contains(storyId)) {
       ids.add(storyId);
@@ -176,7 +181,10 @@ class BookmarkService {
     }
   }
 
-  static Future<void> _untrackStoryId(SharedPreferences prefs, String storyId) async {
+  static Future<void> _untrackStoryId(
+    SharedPreferences prefs,
+    String storyId,
+  ) async {
     final ids = prefs.getStringList(_allBookmarksKey) ?? [];
     ids.remove(storyId);
     await prefs.setStringList(_allBookmarksKey, ids);

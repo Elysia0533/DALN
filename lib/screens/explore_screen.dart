@@ -684,11 +684,52 @@ class _ExploreScreenState extends State<ExploreScreen> {
               onPressed: () => Navigator.pop(dialogContext),
             ),
             TextButton(
+              child: const Text('Tạo catalog.json'),
+              onPressed: () async {
+                Navigator.pop(dialogContext);
+                setState(() => _isLoading = true);
+                try {
+                  final folderUrls = urlController.text
+                      .trim()
+                      .split('\n')
+                      .map((e) => e.trim())
+                      .where((e) => e.isNotEmpty)
+                      .toList();
+                  if (folderUrls.isEmpty) throw Exception('Vui lòng nhập link');
+                  if (folderUrls.length > 1) {
+                    throw Exception(
+                        'Vui lòng xóa các link cũ, chỉ để lại 1 link duy nhất (link thư mục của bạn) để tạo catalog.');
+                  }
+                  
+                  await ApiService.saveDriveStoryFolderInputs(urlController.text, overwrite: true);
+                  final folderUrl = folderUrls.first;
+                  
+                  final driveStories = await ApiService.fetchDriveStoriesFromFolder(folderUrl);
+                  await GoogleDriveService.uploadCatalogToFolder(folderUrl, driveStories);
+                  
+                  if (mounted) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(content: Text('Đã tạo và upload catalog.json thành công!')),
+                    );
+                  }
+                } catch (e) {
+                  if (mounted) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(content: Text('Lỗi: $e')),
+                    );
+                  }
+                } finally {
+                  if (mounted) setState(() => _isLoading = false);
+                }
+              },
+            ),
+            TextButton(
               child: const Text('Quét'),
               onPressed: () async {
                 Navigator.pop(dialogContext);
                 setState(() => _isLoading = true);
                 try {
+                  await ApiService.saveDriveStoryFolderInputs(urlController.text, overwrite: true);
                   final driveStories =
                       await ApiService.fetchDriveStoriesFromFolder(
                         urlController.text,

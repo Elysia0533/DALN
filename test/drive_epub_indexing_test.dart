@@ -88,7 +88,11 @@ void main() {
         (await repository.searchByGenre('tien hiep')).items.single.remoteId,
         'one',
       );
-      final story = (await repository.findByDriveFileId('one'))!;
+      final story = (await repository.findByIdentity(
+        sourceType: 'googleDrive',
+        sourceId: 'root',
+        remoteId: 'one',
+      ))!;
       expect(story.description, 'A short description.');
       expect(story.coverLocalPath, isNull);
       expect((await job('one')).status, SearchIndexJobStatus.complete);
@@ -107,7 +111,11 @@ void main() {
         epubMetadataFixture(metadata: '<dc:title>Partial title</dc:title>'),
       );
       await indexer().synchronizeFolder('root');
-      final initial = (await repository.findByDriveFileId('one'))!;
+      final initial = (await repository.findByIdentity(
+        sourceType: 'googleDrive',
+        sourceId: 'root',
+        remoteId: 'one',
+      ))!;
       await database.close();
       open();
       now = now.add(const Duration(days: 1));
@@ -116,7 +124,11 @@ void main() {
       expect(result.writtenCount, 0);
       expect(result.status, SearchIndexRunStatus.partial);
       expect(
-        (await repository.findByDriveFileId('one'))!.lastIndexedAt,
+        (await repository.findByIdentity(
+          sourceType: 'googleDrive',
+          sourceId: 'root',
+          remoteId: 'one',
+        ))!.lastIndexedAt,
         initial.lastIndexedAt,
       );
     },
@@ -141,7 +153,11 @@ void main() {
       ];
       await indexer().synchronizeFolder('root');
       expect(calls, 1);
-      final story = (await repository.findByDriveFileId('partial'))!;
+      final story = (await repository.findByIdentity(
+        sourceType: 'googleDrive',
+        sourceId: 'root',
+        remoteId: 'partial',
+      ))!;
       expect(story.title, 'Publisher title');
       expect(story.authors, ['Publisher']);
       expect(story.description, 'Publisher description');
@@ -158,7 +174,11 @@ void main() {
       await indexer().synchronizeFolder('root');
       await indexer().synchronizeFolder('root');
       expect(calls, 2);
-      final story = (await repository.findByDriveFileId('one'))!;
+      final story = (await repository.findByIdentity(
+        sourceType: 'googleDrive',
+        sourceId: 'root',
+        remoteId: 'one',
+      ))!;
       expect(story.title, 'Changed');
       expect(story.authors, isEmpty);
       expect(story.description, isEmpty);
@@ -176,7 +196,14 @@ void main() {
       records = [_record('one')];
       await indexer().synchronizeFolder('root');
       expect(calls, 1);
-      expect((await repository.findByDriveFileId('one'))!.title, 'Trời Xanh');
+      expect(
+        (await repository.findByIdentity(
+          sourceType: 'googleDrive',
+          sourceId: 'root',
+          remoteId: 'one',
+        ))!.title,
+        'Trời Xanh',
+      );
     },
   );
 

@@ -44,7 +44,8 @@ class ReadingMarker {
       localPath: json['localPath']?.toString() ?? '',
       chapterIndex: _readInt(json['chapterIndex']),
       paragraphIndex: _readInt(json['paragraphIndex']),
-      snippet: json['snippet']?.toString() ?? json['selectedText']?.toString() ?? '',
+      snippet:
+          json['snippet']?.toString() ?? json['selectedText']?.toString() ?? '',
       scrollOffset: _readDouble(json['scrollOffset']),
       createdAt: _readDate(json['createdAt']) ?? now,
       updatedAt: _readDate(json['updatedAt']) ?? now,

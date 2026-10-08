@@ -1,7 +1,8 @@
 import 'package:flutter/foundation.dart';
 
 class HanVietTranslatorService extends ChangeNotifier {
-  static final HanVietTranslatorService instance = HanVietTranslatorService._internal();
+  static final HanVietTranslatorService instance =
+      HanVietTranslatorService._internal();
   factory HanVietTranslatorService() => instance;
 
   HanVietTranslatorService._internal();

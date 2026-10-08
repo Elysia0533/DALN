@@ -34,6 +34,7 @@ class SearchIndexStory {
     this.coverUrl,
     this.coverLocalPath,
     this.metadataStatus = SearchMetadataStatus.pending,
+    this.extractorVersion,
     this.lastSeenRunId,
     required this.lastIndexedAt,
     List<String> authors = const [],
@@ -56,6 +57,7 @@ class SearchIndexStory {
   final String? coverUrl;
   final String? coverLocalPath;
   final SearchMetadataStatus metadataStatus;
+  final int? extractorVersion;
   final String? lastSeenRunId;
   final DateTime lastIndexedAt;
   final List<String> authors;

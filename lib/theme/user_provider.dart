@@ -5,6 +5,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../models/app_user.dart';
 import '../services/admin_claim_reader.dart';
 import '../services/api_service.dart';
+import '../services/firebase_backend_service.dart';
 
 class UserProvider extends ChangeNotifier {
   static const _nameKey = 'user_name';
@@ -20,6 +21,7 @@ class UserProvider extends ChangeNotifier {
   int _avatarColorValue = 0xFF4CAF50;
   final AdminClaimReader _adminClaimReader;
   StreamSubscription<String?>? _adminClaimSubscription;
+  StreamSubscription<String?>? _sessionSubscription;
   AdminClaimStatus _adminClaimStatus = AdminClaimStatus.nonAdmin;
   String _adminClaimError = '';
   int _adminClaimRequestId = 0;
@@ -42,12 +44,34 @@ class UserProvider extends ChangeNotifier {
   UserProvider({AdminClaimReader? adminClaimReader})
     : _adminClaimReader = adminClaimReader ?? const FirebaseAdminClaimReader() {
     _startAdminClaimListener();
+    _startSessionListener();
     _load();
+  }
+
+  void _startSessionListener() {
+    _sessionSubscription?.cancel();
+    _sessionSubscription = FirebaseBackendService.idTokenUidChanges.listen((uid) async {
+      if (uid == null) {
+        if (isLoggedIn) {
+          logout();
+        }
+      } else {
+        final fbUser = FirebaseBackendService.currentUser;
+        if (fbUser != null && !fbUser.emailVerified) {
+          await FirebaseBackendService.logout();
+          return;
+        }
+        if (_user == null || _user!.id != uid) {
+          await refreshSession();
+        }
+      }
+    });
   }
 
   @override
   void dispose() {
     _adminClaimSubscription?.cancel();
+    _sessionSubscription?.cancel();
     super.dispose();
   }
 
@@ -180,6 +204,11 @@ class UserProvider extends ChangeNotifier {
     await _setBackendUser(user, colorValue);
   }
 
+  Future<void> loginWithGoogle({required int colorValue}) async {
+    final user = await ApiService.loginWithGoogle();
+    await _setBackendUser(user, colorValue);
+  }
+
   Future<void> sendPasswordResetEmail(String email) {
     return ApiService.sendPasswordResetEmail(email: email);
   }
@@ -235,8 +264,9 @@ class UserProvider extends ChangeNotifier {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString(_nameKey, _name);
     await prefs.setInt(_avatarColorKey, colorValue);
-    await ApiService.mergeCloudLibraryIntoLocal();
-    await _syncAdminClaimFromCurrentUser(forceRefresh: false);
+    unawaited(ApiService.syncLocalDataToCloud());
+    unawaited(ApiService.mergeCloudLibraryIntoLocal());
+    unawaited(_syncAdminClaimFromCurrentUser(forceRefresh: false));
     notifyListeners();
   }
 

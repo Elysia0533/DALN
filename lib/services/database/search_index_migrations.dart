@@ -1,7 +1,7 @@
 import 'package:sqflite/sqflite.dart';
 
 abstract final class SearchIndexSchema {
-  static const int version = 1;
+  static const int version = 2;
 
   static Future<void> migrate(
     DatabaseExecutor database,
@@ -22,8 +22,21 @@ abstract final class SearchIndexSchema {
       switch (targetVersion) {
         case 1:
           await _migrateToVersion1(database);
+        case 2:
+          await _migrateToVersion2(database);
       }
     }
+  }
+
+  static Future<void> _migrateToVersion2(DatabaseExecutor database) async {
+    final batch = database.batch();
+    batch.execute('ALTER TABLE stories ADD COLUMN extractor_version INTEGER');
+    batch.execute('DROP INDEX stories_drive_file_id_idx');
+    batch.execute(
+      'CREATE INDEX stories_drive_file_id_idx '
+      'ON stories(drive_file_id)',
+    );
+    await batch.commit(noResult: true);
   }
 
   static Future<void> _migrateToVersion1(DatabaseExecutor database) async {

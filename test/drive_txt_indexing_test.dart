@@ -104,7 +104,11 @@ void main() {
     () async {
       loader = (_) async => const TxtMetadata(title: 'Header title');
       await indexer().synchronizeFolder('root');
-      final original = await repository.findByDriveFileId('one');
+      final original = await repository.findByIdentity(
+        sourceType: 'googleDrive',
+        sourceId: 'root',
+        remoteId: 'one',
+      );
       final originalJob = await job();
       await database.close();
       open();
@@ -114,7 +118,11 @@ void main() {
       expect(result.writtenCount, 0);
       expect(result.status, SearchIndexRunStatus.partial);
       expect(
-        (await repository.findByDriveFileId('one'))!.lastIndexedAt,
+        (await repository.findByIdentity(
+          sourceType: 'googleDrive',
+          sourceId: 'root',
+          remoteId: 'one',
+        ))!.lastIndexedAt,
         original!.lastIndexedAt,
       );
       expect((await job()).updatedAt, originalJob.updatedAt);
@@ -127,7 +135,11 @@ void main() {
       loader = (_) async => const TxtMetadata();
       await indexer().synchronizeFolder('root');
       await indexer().synchronizeFolder('root');
-      final story = (await repository.findByDriveFileId('one'))!;
+      final story = (await repository.findByIdentity(
+        sourceType: 'googleDrive',
+        sourceId: 'root',
+        remoteId: 'one',
+      ))!;
       expect(story.title, 'Filename one');
       expect(story.authors, isEmpty);
       expect(story.metadataStatus, SearchMetadataStatus.missing);
@@ -155,7 +167,11 @@ void main() {
       ];
       await indexer().synchronizeFolder('root');
       expect(calls, 1);
-      final story = (await repository.findByDriveFileId('sidecar'))!;
+      final story = (await repository.findByIdentity(
+        sourceType: 'googleDrive',
+        sourceId: 'root',
+        remoteId: 'sidecar',
+      ))!;
       expect(story.title, 'Sidecar title');
       expect(story.authors, ['Publisher author']);
       expect(story.genres, ['Tiên Hiệp']);
@@ -171,7 +187,11 @@ void main() {
       await indexer().synchronizeFolder('root');
       await indexer().synchronizeFolder('root');
       expect(calls, 2);
-      final story = (await repository.findByDriveFileId('one'))!;
+      final story = (await repository.findByIdentity(
+        sourceType: 'googleDrive',
+        sourceId: 'root',
+        remoteId: 'one',
+      ))!;
       expect(story.title, 'New title');
       expect(story.authors, isEmpty);
       expect(story.genres, isEmpty);

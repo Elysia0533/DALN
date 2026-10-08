@@ -148,7 +148,11 @@ void main() {
     'unchanged revision after reopening does not rewrite story or job metadata',
     () async {
       await indexer().synchronizeFolder('root');
-      final original = await repository.findByDriveFileId('one');
+      final original = await repository.findByIdentity(
+        sourceType: 'googleDrive',
+        sourceId: 'root',
+        remoteId: 'one',
+      );
       final jobs = await repository.loadIndexJobsForSource(
         sourceType: 'googleDrive',
         sourceId: 'root',
@@ -160,7 +164,11 @@ void main() {
       expect(result.writtenCount, 0);
       expect(result.unchangedCount, 2);
       expect(
-        (await repository.findByDriveFileId('one'))!.lastIndexedAt,
+        (await repository.findByIdentity(
+          sourceType: 'googleDrive',
+          sourceId: 'root',
+          remoteId: 'one',
+        ))!.lastIndexedAt,
         original!.lastIndexedAt,
       );
       expect(
@@ -260,9 +268,30 @@ void main() {
       expect(coordinator.state.indexedCount, 102);
       expect(coordinator.state.totalCount, isNull);
       expect(result.deletedCount, 0);
-      expect(await repository.findByDriveFileId('one'), isNotNull);
-      expect(await repository.findByDriveFileId('two'), isNotNull);
-      expect(await repository.findByDriveFileId('invalid'), isNull);
+      expect(
+        await repository.findByIdentity(
+          sourceType: 'googleDrive',
+          sourceId: 'root',
+          remoteId: 'one',
+        ),
+        isNotNull,
+      );
+      expect(
+        await repository.findByIdentity(
+          sourceType: 'googleDrive',
+          sourceId: 'root',
+          remoteId: 'two',
+        ),
+        isNotNull,
+      );
+      expect(
+        await repository.findByIdentity(
+          sourceType: 'googleDrive',
+          sourceId: 'root',
+          remoteId: 'invalid',
+        ),
+        isNull,
+      );
       await database.close();
       openDatabase();
       final state = await repository.readIndexState(
@@ -289,7 +318,11 @@ void main() {
         ),
       ]);
       final result = await indexer().synchronizeFolder('root');
-      final story = await repository.findByDriveFileId('one');
+      final story = await repository.findByIdentity(
+        sourceType: 'googleDrive',
+        sourceId: 'root',
+        remoteId: 'one',
+      );
       expect(result.writtenCount, 1);
       expect(story!.title, 'New fallback');
       expect(story.authors, isEmpty);

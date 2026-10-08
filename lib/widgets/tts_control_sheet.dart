@@ -74,7 +74,10 @@ class TtsControlSheet extends StatelessWidget {
                   children: [
                     Row(
                       children: [
-                        Icon(Icons.settings_voice_rounded, color: colorScheme.primary),
+                        Icon(
+                          Icons.settings_voice_rounded,
+                          color: colorScheme.primary,
+                        ),
                         const SizedBox(width: 8),
                         Text(
                           '⚙️ Cài đặt giọng đọc TTS',
@@ -95,21 +98,28 @@ class TtsControlSheet extends StatelessWidget {
                 // Language Selector
                 Text(
                   'Ngôn ngữ:',
-                  style: theme.textTheme.bodyMedium?.copyWith(fontWeight: FontWeight.bold),
+                  style: theme.textTheme.bodyMedium?.copyWith(
+                    fontWeight: FontWeight.bold,
+                  ),
                 ),
                 const SizedBox(height: 6),
                 DropdownButtonFormField<String>(
                   initialValue: tts.currentLanguage,
                   decoration: InputDecoration(
-                    contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+                    contentPadding: const EdgeInsets.symmetric(
+                      horizontal: 12,
+                      vertical: 8,
+                    ),
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(10),
+                    ),
                   ),
                   isExpanded: true,
                   items: ['vi-VN', 'en-US', 'ja-JP', 'zh-CN', 'fr-FR', 'ko-KR']
-                      .map((lang) => DropdownMenuItem(
-                            value: lang,
-                            child: Text(lang),
-                          ))
+                      .map(
+                        (lang) =>
+                            DropdownMenuItem(value: lang, child: Text(lang)),
+                      )
                       .toList(),
                   onChanged: (val) {
                     if (val != null) tts.setLanguage(val);
@@ -121,14 +131,25 @@ class TtsControlSheet extends StatelessWidget {
                 if (tts.availableVoices.isNotEmpty) ...[
                   Text(
                     'Giọng đọc (Voice):',
-                    style: theme.textTheme.bodyMedium?.copyWith(fontWeight: FontWeight.bold),
+                    style: theme.textTheme.bodyMedium?.copyWith(
+                      fontWeight: FontWeight.bold,
+                    ),
                   ),
                   const SizedBox(height: 6),
                   DropdownButtonFormField<dynamic>(
-                    initialValue: tts.currentVoice ?? (tts.availableVoices.isNotEmpty ? tts.availableVoices.first : null),
+                    initialValue:
+                        tts.currentVoice ??
+                        (tts.availableVoices.isNotEmpty
+                            ? tts.availableVoices.first
+                            : null),
                     decoration: InputDecoration(
-                      contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                      border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+                      contentPadding: const EdgeInsets.symmetric(
+                        horizontal: 12,
+                        vertical: 8,
+                      ),
+                      border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(10),
+                      ),
                     ),
                     isExpanded: true,
                     items: tts.availableVoices.map((voice) {
@@ -156,16 +177,27 @@ class TtsControlSheet extends StatelessWidget {
                 if (tts.availableEngines.isNotEmpty) ...[
                   Text(
                     'TTS Engine:',
-                    style: theme.textTheme.bodyMedium?.copyWith(fontWeight: FontWeight.bold),
+                    style: theme.textTheme.bodyMedium?.copyWith(
+                      fontWeight: FontWeight.bold,
+                    ),
                   ),
                   const SizedBox(height: 6),
                   DropdownButtonFormField<String>(
-                    initialValue: tts.currentEngine != null && tts.availableEngines.contains(tts.currentEngine)
+                    initialValue:
+                        tts.currentEngine != null &&
+                            tts.availableEngines.contains(tts.currentEngine)
                         ? tts.currentEngine
-                        : (tts.availableEngines.isNotEmpty ? tts.availableEngines.first : null),
+                        : (tts.availableEngines.isNotEmpty
+                              ? tts.availableEngines.first
+                              : null),
                     decoration: InputDecoration(
-                      contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                      border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+                      contentPadding: const EdgeInsets.symmetric(
+                        horizontal: 12,
+                        vertical: 8,
+                      ),
+                      border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(10),
+                      ),
                     ),
                     isExpanded: true,
                     items: tts.availableEngines.map((engine) {
@@ -177,7 +209,10 @@ class TtsControlSheet extends StatelessWidget {
                       }
                       return DropdownMenuItem<String>(
                         value: engine,
-                        child: Text(displayName, overflow: TextOverflow.ellipsis),
+                        child: Text(
+                          displayName,
+                          overflow: TextOverflow.ellipsis,
+                        ),
                       );
                     }).toList(),
                     onChanged: (val) {
@@ -190,21 +225,30 @@ class TtsControlSheet extends StatelessWidget {
                 // Audio Stream Selector
                 Text(
                   'Luồng phát âm thanh (Audio Stream):',
-                  style: theme.textTheme.bodyMedium?.copyWith(fontWeight: FontWeight.bold),
+                  style: theme.textTheme.bodyMedium?.copyWith(
+                    fontWeight: FontWeight.bold,
+                  ),
                 ),
                 const SizedBox(height: 6),
                 DropdownButtonFormField<String>(
                   initialValue: tts.audioStream,
                   decoration: InputDecoration(
-                    contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+                    contentPadding: const EdgeInsets.symmetric(
+                      horizontal: 12,
+                      vertical: 8,
+                    ),
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(10),
+                    ),
                   ),
                   isExpanded: true,
                   items: TtsService.availableAudioStreams
-                      .map((stream) => DropdownMenuItem(
-                            value: stream,
-                            child: Text(stream),
-                          ))
+                      .map(
+                        (stream) => DropdownMenuItem(
+                          value: stream,
+                          child: Text(stream),
+                        ),
+                      )
                       .toList(),
                   onChanged: (val) {
                     if (val != null) tts.setAudioStream(val);
@@ -218,11 +262,16 @@ class TtsControlSheet extends StatelessWidget {
                   children: [
                     Text(
                       'Tốc độ đọc:',
-                      style: theme.textTheme.bodyMedium?.copyWith(fontWeight: FontWeight.bold),
+                      style: theme.textTheme.bodyMedium?.copyWith(
+                        fontWeight: FontWeight.bold,
+                      ),
                     ),
                     Text(
                       '${(tts.speechRate * 2.0).toStringAsFixed(2)}x',
-                      style: TextStyle(fontWeight: FontWeight.bold, color: colorScheme.primary),
+                      style: TextStyle(
+                        fontWeight: FontWeight.bold,
+                        color: colorScheme.primary,
+                      ),
                     ),
                   ],
                 ),
@@ -241,11 +290,16 @@ class TtsControlSheet extends StatelessWidget {
                   children: [
                     Text(
                       'Cao độ (Pitch):',
-                      style: theme.textTheme.bodyMedium?.copyWith(fontWeight: FontWeight.bold),
+                      style: theme.textTheme.bodyMedium?.copyWith(
+                        fontWeight: FontWeight.bold,
+                      ),
                     ),
                     Text(
                       tts.pitch.toStringAsFixed(2),
-                      style: TextStyle(fontWeight: FontWeight.bold, color: colorScheme.primary),
+                      style: TextStyle(
+                        fontWeight: FontWeight.bold,
+                        color: colorScheme.primary,
+                      ),
                     ),
                   ],
                 ),
@@ -279,7 +333,10 @@ class TtsControlSheet extends StatelessWidget {
                     ),
                     onPressed: () {
                       final sample = textContent.isNotEmpty
-                          ? textContent.substring(0, min(200, textContent.length))
+                          ? textContent.substring(
+                              0,
+                              min(200, textContent.length),
+                            )
                           : 'Vào thời xa xưa, thế giới này vốn chìm trong hư vô và tĩnh lặng.';
                       tts.speakPreview(sample);
                     },

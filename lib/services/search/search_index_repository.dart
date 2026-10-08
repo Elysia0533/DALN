@@ -160,18 +160,6 @@ class SearchIndexRepository {
     return _hydrateStory(database, rows.single);
   }
 
-  Future<SearchIndexStory?> findByDriveFileId(String driveFileId) async {
-    final database = await _databaseService.database;
-    final rows = await database.query(
-      'stories',
-      where: 'drive_file_id = ?',
-      whereArgs: [driveFileId.trim()],
-      limit: 1,
-    );
-    if (rows.isEmpty) return null;
-    return _hydrateStory(database, rows.single);
-  }
-
   Future<int> countStories({String? sourceType, String? sourceId}) async {
     final database = await _databaseService.database;
     return _countStories(database, sourceType: sourceType, sourceId: sourceId);
@@ -425,6 +413,33 @@ class SearchIndexRepository {
         )
       ''');
       arguments.addAll(anyGenres);
+    }
+
+    // When searching across all sources (no sourceId scope), deduplicate
+    // Drive files that appear in multiple folder roots. Keep only the record
+    // with the best metadata quality (highest metadata_status rank) and most
+    // recent indexing timestamp. Records without a drive_file_id (e.g. local
+    // imports) are never deduplicated.
+    final deduplicateDriveFiles =
+        normalizedSourceId == null && normalizedSourceType == null;
+    if (deduplicateDriveFiles) {
+      clauses.add('''
+        (stories.drive_file_id IS NULL OR stories.id = (
+          SELECT best.id FROM stories AS best
+          WHERE best.drive_file_id = stories.drive_file_id
+          ORDER BY
+            CASE best.metadata_status
+              WHEN 'complete' THEN 4
+              WHEN 'partial' THEN 3
+              WHEN 'missing' THEN 2
+              WHEN 'pending' THEN 1
+              ELSE 0
+            END DESC,
+            best.last_indexed_at DESC,
+            best.id ASC
+          LIMIT 1
+        ))
+      ''');
     }
 
     final query = StringBuffer('SELECT stories.* FROM stories');
@@ -1058,6 +1073,7 @@ class SearchIndexRepository {
         row['metadata_status'] as String,
       ),
       lastSeenRunId: row['last_seen_run_id'] as String?,
+      extractorVersion: (row['extractor_version'] as num?)?.toInt(),
       lastIndexedAt: DateTime.fromMillisecondsSinceEpoch(
         lastIndexedAt,
         isUtc: true,
@@ -1154,6 +1170,7 @@ class _PreparedStory {
     required this.coverUrl,
     required this.coverLocalPath,
     required this.metadataStatus,
+    required this.extractorVersion,
     required this.lastSeenRunId,
     required this.lastIndexedAt,
     required this.authors,
@@ -1198,6 +1215,7 @@ class _PreparedStory {
       coverUrl: _trimToNull(story.coverUrl),
       coverLocalPath: _trimToNull(story.coverLocalPath),
       metadataStatus: story.metadataStatus.storageValue,
+      extractorVersion: story.extractorVersion,
       lastSeenRunId: _trimToNull(story.lastSeenRunId),
       lastIndexedAt: story.lastIndexedAt.toUtc().millisecondsSinceEpoch,
       authors: _prepareLabels(story.authors),
@@ -1220,6 +1238,7 @@ class _PreparedStory {
   final String? coverUrl;
   final String? coverLocalPath;
   final String metadataStatus;
+  final int? extractorVersion;
   final String? lastSeenRunId;
   final int lastIndexedAt;
   final List<_PreparedLabel> authors;
@@ -1244,6 +1263,7 @@ class _PreparedStory {
       'cover_url': coverUrl,
       'cover_local_path': coverLocalPath,
       'metadata_status': metadataStatus,
+      'extractor_version': extractorVersion,
       'last_seen_run_id': lastSeenRunId,
       'last_indexed_at': lastIndexedAt,
     };

@@ -88,6 +88,7 @@ class DriveMetadataIndexer {
   final DriveFolderIdParser _folderIdParser;
   final TxtMetadataLoader? _txtMetadataLoader;
   final BookMetadataLoader? _epubMetadataLoader;
+  static const int currentExtractorVersion = 1;
   static const maxExtractionAttempts = 3;
   final SearchIndexClock _clock;
   final SearchIndexRunIdFactory _runIdFactory;
@@ -420,14 +421,21 @@ class DriveMetadataIndexer {
         : 'epub_extraction_failed';
     final hasRevision =
         _trimToNull(record.checksum) != null || record.modifiedTime != null;
-    if (loader != null &&
-        status != SearchIndexJobStatus.complete &&
-        hasRevision) {
+    final oldExtractor =
+        existing != null &&
+        existing.extractorVersion != currentExtractorVersion;
+
+    final needsExtraction =
+        status != SearchIndexJobStatus.complete || oldExtractor;
+    final allowedToExtract = hasRevision;
+
+    if (loader != null && needsExtraction && allowedToExtract) {
       if (mimeType == 'application/epub+zip' &&
           (record.fileSize ?? 0) > GoogleDriveService.epubMetadataMaxBytes) {
         status = SearchIndexJobStatus.error;
         errorCode = 'epub_size_limit';
       } else if (sameRevision &&
+          !oldExtractor &&
           existingJob?.status == SearchIndexJobStatus.complete) {
         status = SearchIndexJobStatus.complete;
       } else if (sameRevision &&
@@ -531,6 +539,7 @@ class DriveMetadataIndexer {
           : foundMetadata
           ? SearchMetadataStatus.partial
           : story.metadataStatus,
+      extractorVersion: currentExtractorVersion,
     );
   }
 
@@ -591,6 +600,7 @@ class DriveMetadataIndexer {
       coverUrl: _trimToNull(record.coverUrl) ?? existing?.coverUrl,
       coverLocalPath: existing?.coverLocalPath,
       metadataStatus: metadataStatus,
+      extractorVersion: existing?.extractorVersion,
       lastSeenRunId: runId,
       lastIndexedAt: indexedAt,
       authors: authors,

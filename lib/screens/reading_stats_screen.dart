@@ -28,7 +28,7 @@ class _ReadingStatsScreenState extends State<ReadingStatsScreen> {
     setState(() => _isLoading = true);
     final prefs = await SharedPreferences.getInstance();
     final keys = prefs.getKeys();
-    
+
     final progresses = <ReadingProgress>[];
     for (final key in keys) {
       if (key.startsWith('rp_')) {
@@ -47,12 +47,14 @@ class _ReadingStatsScreenState extends State<ReadingStatsScreen> {
     for (final marker in historyMarkers) {
       final exists = progresses.any((p) => p.storyId == marker.storyId);
       if (!exists) {
-        progresses.add(ReadingProgress(
-          storyId: marker.storyId,
-          chapterIndex: marker.chapterIndex,
-          scrollOffset: marker.scrollOffset,
-          updatedAt: marker.updatedAt,
-        ));
+        progresses.add(
+          ReadingProgress(
+            storyId: marker.storyId,
+            chapterIndex: marker.chapterIndex,
+            scrollOffset: marker.scrollOffset,
+            updatedAt: marker.updatedAt,
+          ),
+        );
       }
     }
 
@@ -89,9 +91,7 @@ class _ReadingStatsScreenState extends State<ReadingStatsScreen> {
     final isDark = Theme.of(context).brightness == Brightness.dark;
 
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('Thống kê đọc sách'),
-      ),
+      appBar: AppBar(title: const Text('Thống kê đọc sách')),
       body: _isLoading
           ? const Center(child: CircularProgressIndicator())
           : SingleChildScrollView(
@@ -132,31 +132,52 @@ class _ReadingStatsScreenState extends State<ReadingStatsScreen> {
                     Center(
                       child: Padding(
                         padding: const EdgeInsets.all(32.0),
-                        child: Text('Chưa có lịch sử đọc', style: TextStyle(color: Colors.grey)),
+                        child: Text(
+                          'Chưa có lịch sử đọc',
+                          style: TextStyle(color: Colors.grey),
+                        ),
                       ),
                     )
                   else
                     ListView.builder(
                       shrinkWrap: true,
                       physics: const NeverScrollableScrollPhysics(),
-                      itemCount: _recentProgresses.length > 10 ? 10 : _recentProgresses.length, // Show up to 10
+                      itemCount: _recentProgresses.length > 10
+                          ? 10
+                          : _recentProgresses.length, // Show up to 10
                       itemBuilder: (context, index) {
                         final progress = _recentProgresses[index];
                         return Card(
                           margin: const EdgeInsets.only(bottom: 12),
                           elevation: 0,
                           color: isDark ? Colors.white10 : Colors.grey.shade100,
-                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(12),
+                          ),
                           child: ListTile(
                             leading: CircleAvatar(
-                              backgroundColor: Colors.blue.withValues(alpha: 0.1),
-                              child: const Icon(Icons.menu_book_rounded, color: Colors.blue),
+                              backgroundColor: Colors.blue.withValues(
+                                alpha: 0.1,
+                              ),
+                              child: const Icon(
+                                Icons.menu_book_rounded,
+                                color: Colors.blue,
+                              ),
                             ),
-                            title: Text(_getStoryTitle(progress.storyId), maxLines: 1, overflow: TextOverflow.ellipsis),
-                            subtitle: Text('Chương ${progress.chapterIndex} / ${progress.totalChapters}'),
+                            title: Text(
+                              _getStoryTitle(progress.storyId),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                            subtitle: Text(
+                              'Chương ${progress.chapterIndex} / ${progress.totalChapters}',
+                            ),
                             trailing: Text(
                               '${progress.updatedAt.day}/${progress.updatedAt.month}',
-                              style: TextStyle(color: isDark ? Colors.white54 : Colors.black54, fontSize: 12),
+                              style: TextStyle(
+                                color: isDark ? Colors.white54 : Colors.black54,
+                                fontSize: 12,
+                              ),
                             ),
                           ),
                         );
@@ -168,11 +189,19 @@ class _ReadingStatsScreenState extends State<ReadingStatsScreen> {
     );
   }
 
-  Widget _buildStatCard(String title, String value, IconData icon, Color color, bool isDark) {
+  Widget _buildStatCard(
+    String title,
+    String value,
+    IconData icon,
+    Color color,
+    bool isDark,
+  ) {
     return Container(
       padding: const EdgeInsets.all(20),
       decoration: BoxDecoration(
-        color: isDark ? color.withValues(alpha: 0.1) : color.withValues(alpha: 0.05),
+        color: isDark
+            ? color.withValues(alpha: 0.1)
+            : color.withValues(alpha: 0.05),
         borderRadius: BorderRadius.circular(16),
         border: Border.all(color: color.withValues(alpha: 0.3)),
       ),
@@ -183,7 +212,11 @@ class _ReadingStatsScreenState extends State<ReadingStatsScreen> {
           const SizedBox(height: 16),
           Text(
             value,
-            style: TextStyle(fontSize: 32, fontWeight: FontWeight.bold, color: color),
+            style: TextStyle(
+              fontSize: 32,
+              fontWeight: FontWeight.bold,
+              color: color,
+            ),
           ),
           const SizedBox(height: 4),
           Text(

@@ -1,6 +1,5 @@
 // Data models representing paragraph and sub-chunk units for smart TTS reading.
 
-
 class TtsSubChunk {
   final String id;
   final String text;

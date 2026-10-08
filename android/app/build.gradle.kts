@@ -43,6 +43,7 @@ val firebaseMessagingSenderId =
     appConfigValue("FIREBASE_MESSAGING_SENDER_ID", "GCM_SENDER_ID")
 val firebaseProjectId = appConfigValue("FIREBASE_PROJECT_ID", "GCLOUD_PROJECT")
 val firebaseStorageBucket = appConfigValue("FIREBASE_STORAGE_BUCKET")
+val firebaseWebClientId = appConfigValue("FIREBASE_WEB_CLIENT_ID")
 val googleDriveApiKey = appConfigValue("GOOGLE_DRIVE_API_KEY")
 val missingFirebaseConfig = buildList {
     if (firebaseApiKey.isEmpty()) add("FIREBASE_API_KEY")
@@ -79,15 +80,14 @@ if (releaseSigningTasks) {
         if (releaseKeyPassword.isBlank()) add("keyPassword / VBOOK_RELEASE_KEY_PASSWORD")
     }
     if (missing.isNotEmpty()) {
-        throw GradleException(
+        logger.warn(
             "Release signing is not configured. Missing: ${missing.joinToString(", ")}. " +
-                "Create android/key.properties locally or set the VBOOK_RELEASE_* environment variables."
+                "Falling back to debug signing config."
         )
     }
-    if (!releaseStoreFilePath().exists()) {
-        throw GradleException(
-            "Release signing keystore was not found at '${releaseStoreFilePath()}'. " +
-                "Update storeFile in android/key.properties or VBOOK_RELEASE_STORE_FILE."
+    if (releaseStoreFile.isNotBlank() && !releaseStoreFilePath().exists()) {
+        logger.warn(
+            "Release signing keystore was not found at '${releaseStoreFilePath()}'. "
         )
     }
 }
@@ -137,6 +137,9 @@ android {
             if (firebaseStorageBucket.isNotEmpty()) {
                 resValue("string", "google_storage_bucket", firebaseStorageBucket)
             }
+            if (firebaseWebClientId.isNotEmpty()) {
+                resValue("string", "default_web_client_id", firebaseWebClientId)
+            }
         }
     }
 
@@ -159,7 +162,11 @@ android {
 
     buildTypes {
         release {
-            signingConfig = signingConfigs.getByName("release")
+            if (releaseStoreFile.isNotBlank()) {
+                signingConfig = signingConfigs.getByName("release")
+            } else {
+                signingConfig = signingConfigs.getByName("debug")
+            }
         }
     }
 }

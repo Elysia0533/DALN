@@ -47,7 +47,8 @@ class _ReadingScreenState extends State<ReadingScreen> {
     _setupTtsListener();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _recordHistory();
-      if (widget.initialScrollOffset != null || widget.initialParagraphIndex != null) {
+      if (widget.initialScrollOffset != null ||
+          widget.initialParagraphIndex != null) {
         _scrollToBookmarkPosition(
           scrollOffset: widget.initialScrollOffset,
           paragraphIndex: widget.initialParagraphIndex,
@@ -89,7 +90,6 @@ class _ReadingScreenState extends State<ReadingScreen> {
     );
   }
 
-
   Future<void> _restoreScrollPosition() async {
     final offset = await ApiService.getScrollOffset(widget.story.id);
     if (!mounted) return;
@@ -122,8 +122,6 @@ class _ReadingScreenState extends State<ReadingScreen> {
       _showEnglish && widget.story.contentEng.isNotEmpty
       ? widget.story.contentEng
       : widget.story.content;
-
-
 
   (int, String) _getCurrentParagraphInfo() {
     final paragraphs = _currentContent
@@ -189,7 +187,10 @@ class _ReadingScreenState extends State<ReadingScreen> {
     );
   }
 
-  Future<void> _toggleBookmark({int? targetParagraphIndex, String? targetSnippet}) async {
+  Future<void> _toggleBookmark({
+    int? targetParagraphIndex,
+    String? targetSnippet,
+  }) async {
     final (pIdx, pSnippet) = targetParagraphIndex != null
         ? (targetParagraphIndex, targetSnippet ?? '')
         : _getCurrentParagraphInfo();
@@ -204,7 +205,9 @@ class _ReadingScreenState extends State<ReadingScreen> {
     setState(() => _isBookmarked = added);
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
-        content: Text(added ? 'Đã thêm bookmark (Đoạn ${pIdx + 1})' : 'Đã bỏ bookmark'),
+        content: Text(
+          added ? 'Đã thêm bookmark (Đoạn ${pIdx + 1})' : 'Đã bỏ bookmark',
+        ),
         duration: const Duration(milliseconds: 1100),
       ),
     );
@@ -250,15 +253,12 @@ class _ReadingScreenState extends State<ReadingScreen> {
   }
 
   Future<void> _speakSelection(String selectedText) async {
-
     await TtsService.instance.speakFromSelection(
       fullText: _currentContent,
       selectedText: selectedText,
       storyId: widget.story.id,
     );
   }
-
-
 
   void _showSelectionSearch(String selectedText) {
     final query = selectedText.trim();
@@ -306,7 +306,10 @@ class _ReadingScreenState extends State<ReadingScreen> {
           .where((p) => p.isNotEmpty)
           .toList();
       if (paragraphs.isNotEmpty) {
-        final ratio = (paragraphIndex / (paragraphs.length - 1)).clamp(0.0, 1.0);
+        final ratio = (paragraphIndex / (paragraphs.length - 1)).clamp(
+          0.0,
+          1.0,
+        );
         targetOffset = ratio * maxScroll;
       }
     }
@@ -414,10 +417,14 @@ class _ReadingScreenState extends State<ReadingScreen> {
                       const SizedBox(height: 24),
                       Builder(
                         builder: (context) {
-                          final parsedParagraphs = TtsService.parseParagraphs(_currentContent);
+                          final parsedParagraphs = TtsService.parseParagraphs(
+                            _currentContent,
+                          );
                           return Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
-                            children: List.generate(parsedParagraphs.length, (i) {
+                            children: List.generate(parsedParagraphs.length, (
+                              i,
+                            ) {
                               final p = parsedParagraphs[i];
                               return _ParagraphWidget(
                                 key: ValueKey('rs_p_$i'),
@@ -427,14 +434,17 @@ class _ReadingScreenState extends State<ReadingScreen> {
                                 style: settings.bodyTextStyle,
                                 onNote: _saveSelectionNote,
                                 onSpeak: (selectedText) =>
-                                    _speakSelectionFromParagraph(selectedText, i),
+                                    _speakSelectionFromParagraph(
+                                      selectedText,
+                                      i,
+                                    ),
                                 onSelectionSpeak: (selectedText, start, end) =>
                                     _speakSelectionFromParagraph(
-                                  selectedText,
-                                  i,
-                                  start: start,
-                                  end: end,
-                                ),
+                                      selectedText,
+                                      i,
+                                      start: start,
+                                      end: end,
+                                    ),
                                 onSearch: _showSelectionSearch,
                                 onSettings: (_) => _showSettings(),
                                 onShare: _shareSelection,
@@ -702,8 +712,6 @@ class _ReadingScreenState extends State<ReadingScreen> {
   }
 }
 
-
-
 class _SelectionSearchSheet extends StatelessWidget {
   final String query;
   final int count;
@@ -946,8 +954,8 @@ class _TextBookmarksSheet extends StatelessWidget {
                         marker.snippet.isNotEmpty
                             ? '"${marker.snippet}"'
                             : (marker.chapterTitle.isNotEmpty
-                                ? marker.chapterTitle
-                                : 'Bookmark'),
+                                  ? marker.chapterTitle
+                                  : 'Bookmark'),
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                         style: const TextStyle(fontWeight: FontWeight.w700),
@@ -1197,7 +1205,8 @@ class _ParagraphWidget extends StatelessWidget {
       listenable: TtsService.instance,
       builder: (context, _) {
         final tts = TtsService.instance;
-        final isCurrent = (tts.isPlaying || tts.isPaused) &&
+        final isCurrent =
+            (tts.isPlaying || tts.isPaused) &&
             tts.currentParagraphIndex == paragraphIndex;
 
         final colorScheme = Theme.of(context).colorScheme;
@@ -1234,4 +1243,3 @@ class _ParagraphWidget extends StatelessWidget {
     );
   }
 }
-

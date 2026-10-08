@@ -18,7 +18,9 @@ import 'package:xml/xml.dart';
 import '../models/app_user.dart';
 import '../models/community_message.dart';
 import '../models/reading_marker.dart';
+import '../models/reading_progress.dart';
 import '../models/story.dart';
+import 'bookmark_service.dart';
 import 'firebase_backend_service.dart';
 import 'google_drive_service.dart';
 
@@ -940,10 +942,16 @@ class ApiService {
     );
   }
 
-  static Future<void> saveDriveStoryFolderInputs(String value) async {
+  static Future<void> saveDriveStoryFolderInputs(String value, {bool overwrite = false}) async {
     final inputs = GoogleDriveService.parseFolderInputs(value);
-    if (inputs.isEmpty) return;
     final prefs = await SharedPreferences.getInstance();
+    
+    if (overwrite) {
+      await prefs.setStringList(_driveFolderInputsKey, inputs);
+      return;
+    }
+    
+    if (inputs.isEmpty) return;
     final existing = prefs.getStringList(_driveFolderInputsKey) ?? [];
     final merged = <String>{...existing, ...inputs}.toList();
     await prefs.setStringList(_driveFolderInputsKey, merged);
@@ -972,6 +980,44 @@ class ApiService {
     await prefs.setString(_authUserKey, json.encode(user.toJson()));
   }
 
+  static Future<void> syncLocalDataToCloud() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      
+      // Sync Library Stories (which includes ReadingProgress locally merged as Story.savedChapterIndex)
+      final localStoriesJson = prefs.getStringList(_localStoriesKey) ?? [];
+      final localStories = localStoriesJson.map((s) => Story.fromJson(json.decode(s))).toList();
+      
+      if (localStories.isNotEmpty) {
+        await FirebaseBackendService.syncLibraryBatch(localStories);
+      }
+
+      // Sync Bookmarks
+      final List<Bookmark> localBookmarks = await BookmarkService.getAllBookmarks();
+      if (localBookmarks.isNotEmpty) {
+        final List<ReadingMarker> markers = localBookmarks.map((b) => ReadingMarker(
+          id: b.id,
+          storyId: b.storyId,
+          storyTitle: b.storyTitle,
+          chapterTitle: b.chapterTitle, 
+          iconUrl: '',
+          driveFileId: '',
+          fileType: '',
+          localPath: '',
+          chapterIndex: b.chapterIndex,
+          paragraphIndex: b.paragraphIndex,
+          snippet: b.note.isNotEmpty ? b.note : b.selectedText,
+          scrollOffset: b.scrollOffset,
+          createdAt: b.createdAt,
+          updatedAt: b.createdAt,
+        )).toList();
+        await FirebaseBackendService.syncBookmarksBatch(markers);
+      }
+    } catch (e) {
+      debugPrint('ApiService.syncLocalDataToCloud error: \$e');
+    }
+  }
+
   static Future<void> mergeCloudLibraryIntoLocal() async {
     try {
       final cloudStories =
@@ -984,15 +1030,30 @@ class ApiService {
           .map((s) => Story.fromJson(json.decode(s)))
           .toList();
 
-      for (final cloudStory in cloudStories.reversed) {
-        final exists = localStories.any((story) {
+      for (var cloudStory in cloudStories.reversed) {
+        if (cloudStory.localPath.isNotEmpty) {
+          final file = File(cloudStory.localPath);
+          if (!await file.exists()) {
+            cloudStory = cloudStory.copyWith(localPath: '');
+          }
+        }
+        final existingIndex = localStories.indexWhere((story) {
           final sameId = story.id == cloudStory.id;
           final sameDriveFile =
               cloudStory.driveFileId.isNotEmpty &&
               story.driveFileId == cloudStory.driveFileId;
-          return sameId || sameDriveFile;
+          final sameTitleLocal = 
+              story.isLocal && cloudStory.isLocal && story.title == cloudStory.title;
+          return sameId || sameDriveFile || sameTitleLocal;
         });
-        if (!exists) {
+        
+        if (existingIndex != -1) {
+          final localStory = localStories[existingIndex];
+          if (cloudStory.localPath.isEmpty && localStory.localPath.isNotEmpty) {
+            cloudStory = cloudStory.copyWith(localPath: localStory.localPath);
+          }
+          localStories[existingIndex] = cloudStory;
+        } else {
           localStories.insert(0, cloudStory);
         }
       }
@@ -1398,6 +1459,17 @@ class ApiService {
     }
 
     await FirebaseBackendService.sendPasswordResetEmail(email: normalizedEmail);
+  }
+
+  static Future<AppUser> loginWithGoogle() async {
+    if (!FirebaseBackendService.isInitialized) {
+      throw Exception('Dịch vụ mạng chưa sẵn sàng, vui lòng thử lại sau.');
+    }
+    final user = await FirebaseBackendService.loginWithGoogle();
+    await _saveLocalBackupAccount(user: user, password: 'google_oauth_no_password');
+    await _saveAuthSession(user, user.id);
+    unawaited(syncPendingCloudData());
+    return user;
   }
 
   static Future<AppUser> updateUserProfile({

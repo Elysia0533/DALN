@@ -98,8 +98,8 @@ class TtsService extends ChangeNotifier {
 
   TtsParagraph? get currentParagraph =>
       _paragraphs.isNotEmpty && _currentParagraphIndex < _paragraphs.length
-          ? _paragraphs[_currentParagraphIndex]
-          : null;
+      ? _paragraphs[_currentParagraphIndex]
+      : null;
 
   TtsSubChunk? get currentSubChunk {
     final p = currentParagraph;
@@ -112,11 +112,13 @@ class TtsService extends ChangeNotifier {
   // Backward compatibility getters
   List<TtsChunk> get chunks => _paragraphs
       .expand((p) => p.subChunks)
-      .map((sc) => TtsChunk(
-            text: sc.text,
-            startOffset: sc.startOffset,
-            endOffset: sc.endOffset,
-          ))
+      .map(
+        (sc) => TtsChunk(
+          text: sc.text,
+          startOffset: sc.startOffset,
+          endOffset: sc.endOffset,
+        ),
+      )
       .toList();
 
   int get currentChunkIndex => _currentParagraphIndex;
@@ -200,7 +202,9 @@ class TtsService extends ChangeNotifier {
           if (_stopAtEndOfChapter) {
             _stopAtEndOfChapter = false;
             await stop();
-          } else if (!_isSelection && onChapterChangeRequested != null && _currentChapterIndex != null) {
+          } else if (!_isSelection &&
+              onChapterChangeRequested != null &&
+              _currentChapterIndex != null) {
             final nextChap = _currentChapterIndex! + 1;
             debugPrint('[TTS] Requesting next chapter: $nextChap');
             onChapterChangeRequested?.call(nextChap);
@@ -252,9 +256,14 @@ class TtsService extends ChangeNotifier {
 
     final rawBlocks = <String>[];
     // HTML tag aware split or plain line split
-    if (text.contains('<p>') || text.contains('<div>') || text.contains('<br>')) {
+    if (text.contains('<p>') ||
+        text.contains('<div>') ||
+        text.contains('<br>')) {
       final cleaned = text
-          .replaceAll(RegExp(r'</?(p|div|h[1-6]|br)\s*/?>', caseSensitive: false), '\n')
+          .replaceAll(
+            RegExp(r'</?(p|div|h[1-6]|br)\s*/?>', caseSensitive: false),
+            '\n',
+          )
           .replaceAll(RegExp(r'<[^>]*>'), '');
       rawBlocks.addAll(cleaned.split(RegExp(r'\r?\n+')));
     } else {
@@ -270,14 +279,16 @@ class TtsService extends ChangeNotifier {
 
       final subChunks = <TtsSubChunk>[];
       if (pText.length <= maxChunkLength) {
-        subChunks.add(TtsSubChunk(
-          id: 'p${paragraphIdx}_s0',
-          text: pText,
-          startOffset: 0,
-          endOffset: pText.length,
-          paragraphIndex: paragraphIdx,
-          subChunkIndex: 0,
-        ));
+        subChunks.add(
+          TtsSubChunk(
+            id: 'p${paragraphIdx}_s0',
+            text: pText,
+            startOffset: 0,
+            endOffset: pText.length,
+            paragraphIndex: paragraphIdx,
+            subChunkIndex: 0,
+          ),
+        );
       } else {
         // Split long paragraph into sentence-bounded subchunks
         int start = 0;
@@ -297,14 +308,16 @@ class TtsService extends ChangeNotifier {
           }
           final chunkText = pText.substring(start, end).trim();
           if (chunkText.isNotEmpty) {
-            subChunks.add(TtsSubChunk(
-              id: 'p${paragraphIdx}_s$subIdx',
-              text: chunkText,
-              startOffset: start,
-              endOffset: end,
-              paragraphIndex: paragraphIdx,
-              subChunkIndex: subIdx,
-            ));
+            subChunks.add(
+              TtsSubChunk(
+                id: 'p${paragraphIdx}_s$subIdx',
+                text: chunkText,
+                startOffset: start,
+                endOffset: end,
+                paragraphIndex: paragraphIdx,
+                subChunkIndex: subIdx,
+              ),
+            );
             subIdx++;
           }
           start = end;
@@ -312,13 +325,15 @@ class TtsService extends ChangeNotifier {
       }
 
       if (subChunks.isNotEmpty) {
-        paragraphs.add(TtsParagraph(
-          id: 'p_$paragraphIdx',
-          text: pText,
-          paragraphIndex: paragraphIdx,
-          chapterIndex: chapterIndex,
-          subChunks: subChunks,
-        ));
+        paragraphs.add(
+          TtsParagraph(
+            id: 'p_$paragraphIdx',
+            text: pText,
+            paragraphIndex: paragraphIdx,
+            chapterIndex: chapterIndex,
+            subChunks: subChunks,
+          ),
+        );
         paragraphIdx++;
       }
     }
@@ -370,10 +385,13 @@ class TtsService extends ChangeNotifier {
           : const <String>[];
 
       final selected = languages.firstWhere(
-        (lang) => lang.toLowerCase() == 'vi-vn' || lang.toLowerCase() == 'vi_vn',
+        (lang) =>
+            lang.toLowerCase() == 'vi-vn' || lang.toLowerCase() == 'vi_vn',
         orElse: () => languages.firstWhere(
           (lang) => lang.toLowerCase().startsWith('vi'),
-          orElse: () => languages.contains('en-US') ? 'en-US' : (languages.isNotEmpty ? languages.first : 'vi-VN'),
+          orElse: () => languages.contains('en-US')
+              ? 'en-US'
+              : (languages.isNotEmpty ? languages.first : 'vi-VN'),
         ),
       );
       _currentLanguage = selected;
@@ -389,7 +407,9 @@ class TtsService extends ChangeNotifier {
       await _initCompleter.future;
     }
     if (session != null && session != _speechSessionId) {
-      debugPrint('[TTS] Session invalidated: $session (current: $_speechSessionId)');
+      debugPrint(
+        '[TTS] Session invalidated: $session (current: $_speechSessionId)',
+      );
       return;
     }
 
@@ -420,7 +440,9 @@ class TtsService extends ChangeNotifier {
   }) async {
     if (text.trim().isEmpty) return;
 
-    debugPrint('[TTS] Start chapter: $chapterIndex, startParagraph: $startParagraphIndex');
+    debugPrint(
+      '[TTS] Start chapter: $chapterIndex, startParagraph: $startParagraphIndex',
+    );
     _isSelection = false;
     _currentStoryId = storyId;
     _currentChapterIndex = chapterIndex;
@@ -429,7 +451,10 @@ class TtsService extends ChangeNotifier {
 
     if (_paragraphs.isEmpty) return;
 
-    _currentParagraphIndex = startParagraphIndex.clamp(0, _paragraphs.length - 1);
+    _currentParagraphIndex = startParagraphIndex.clamp(
+      0,
+      _paragraphs.length - 1,
+    );
     _currentSubChunkIndex = 0;
 
     _speechSessionId++;
@@ -453,7 +478,9 @@ class TtsService extends ChangeNotifier {
     int? newChapterIndex,
     bool startAtEnd = false,
   }) async {
-    debugPrint('[TTS] Chapter loaded: $newChapterIndex, startAtEnd: $startAtEnd');
+    debugPrint(
+      '[TTS] Chapter loaded: $newChapterIndex, startAtEnd: $startAtEnd',
+    );
     _currentChapterIndex = newChapterIndex;
     _paragraphs = parseParagraphs(chapterText, chapterIndex: newChapterIndex);
 
@@ -485,7 +512,9 @@ class TtsService extends ChangeNotifier {
   }) async {
     if (fullText.trim().isEmpty) return;
 
-    debugPrint('[TTS] Selection received: "$selectedText" (start: $selectionStart)');
+    debugPrint(
+      '[TTS] Selection received: "$selectedText" (start: $selectionStart)',
+    );
     _isSelection = false;
     _currentStoryId = storyId;
     _currentChapterIndex = chapterIndex;
@@ -495,7 +524,9 @@ class TtsService extends ChangeNotifier {
     if (_paragraphs.isEmpty) return;
 
     int pIdx = 0;
-    if (targetParagraphIndex != null && targetParagraphIndex >= 0 && targetParagraphIndex < _paragraphs.length) {
+    if (targetParagraphIndex != null &&
+        targetParagraphIndex >= 0 &&
+        targetParagraphIndex < _paragraphs.length) {
       pIdx = targetParagraphIndex;
     } else {
       // Find paragraph containing selectedText
@@ -508,7 +539,9 @@ class TtsService extends ChangeNotifier {
       }
     }
 
-    debugPrint('[TTS] Paragraph detected: $pIdx (length: ${_paragraphs[pIdx].text.length})');
+    debugPrint(
+      '[TTS] Paragraph detected: $pIdx (length: ${_paragraphs[pIdx].text.length})',
+    );
     _currentParagraphIndex = pIdx;
     _currentSubChunkIndex = 0; // ALWAYS read from head of paragraph!
 
@@ -545,10 +578,7 @@ class TtsService extends ChangeNotifier {
 
   /// Legacy selection speak fallback
   Future<void> speakSelection(String text) async {
-    await speakFromSelection(
-      fullText: text,
-      selectedText: text,
-    );
+    await speakFromSelection(fullText: text, selectedText: text);
   }
 
   /// Toggle play/pause for a given text content
@@ -599,7 +629,8 @@ class TtsService extends ChangeNotifier {
   }
 
   Future<void> nextParagraph() async {
-    if (_paragraphs.isNotEmpty && _currentParagraphIndex < _paragraphs.length - 1) {
+    if (_paragraphs.isNotEmpty &&
+        _currentParagraphIndex < _paragraphs.length - 1) {
       _speechSessionId++;
       final session = _speechSessionId;
       await _flutterTts.stop();
@@ -609,7 +640,8 @@ class TtsService extends ChangeNotifier {
       debugPrint('[TTS] Next paragraph: $_currentParagraphIndex');
       notifyListeners();
       await _safeSpeak(currentParagraph!.subChunks[0].text, session: session);
-    } else if (onChapterChangeRequested != null && _currentChapterIndex != null) {
+    } else if (onChapterChangeRequested != null &&
+        _currentChapterIndex != null) {
       final nextChap = _currentChapterIndex! + 1;
       debugPrint('[TTS] Next chapter requested: $nextChap');
       onChapterChangeRequested?.call(nextChap);
@@ -629,7 +661,9 @@ class TtsService extends ChangeNotifier {
       debugPrint('[TTS] Previous paragraph: $_currentParagraphIndex');
       notifyListeners();
       await _safeSpeak(currentParagraph!.subChunks[0].text, session: session);
-    } else if (onChapterChangeRequested != null && _currentChapterIndex != null && _currentChapterIndex! > 0) {
+    } else if (onChapterChangeRequested != null &&
+        _currentChapterIndex != null &&
+        _currentChapterIndex! > 0) {
       final prevChap = _currentChapterIndex! - 1;
       debugPrint('[TTS] Previous chapter requested: $prevChap');
       onChapterChangeRequested?.call(prevChap);

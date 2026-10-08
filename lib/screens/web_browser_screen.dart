@@ -190,9 +190,7 @@ class _WebBrowserScreenState extends State<WebBrowserScreen> {
           // Navigation bar
           _buildNavBar(colorScheme, isDark),
           // WebView
-          Expanded(
-            child: WebViewWidget(controller: _controller),
-          ),
+          Expanded(child: WebViewWidget(controller: _controller)),
         ],
       ),
     );
@@ -309,8 +307,8 @@ class _WebBrowserScreenState extends State<WebBrowserScreen> {
           IconButton(
             icon: const Icon(Icons.login_outlined, size: 20),
             onPressed: () {
-              final baseUrl = widget.initialUrl.endsWith('/') 
-                  ? widget.initialUrl.substring(0, widget.initialUrl.length - 1) 
+              final baseUrl = widget.initialUrl.endsWith('/')
+                  ? widget.initialUrl.substring(0, widget.initialUrl.length - 1)
                   : widget.initialUrl;
               _controller.loadRequest(Uri.parse('$baseUrl/login'));
             },
@@ -327,10 +325,7 @@ class _WebBrowserScreenState extends State<WebBrowserScreen> {
                   SnackBar(
                     content: Text('URL: $url'),
                     behavior: SnackBarBehavior.floating,
-                    action: SnackBarAction(
-                      label: 'OK',
-                      onPressed: () {},
-                    ),
+                    action: SnackBarAction(label: 'OK', onPressed: () {}),
                   ),
                 );
               }
@@ -343,8 +338,8 @@ class _WebBrowserScreenState extends State<WebBrowserScreen> {
   }
 
   void _handleMenuAction(String action) {
-    final baseUrl = widget.initialUrl.endsWith('/') 
-        ? widget.initialUrl.substring(0, widget.initialUrl.length - 1) 
+    final baseUrl = widget.initialUrl.endsWith('/')
+        ? widget.initialUrl.substring(0, widget.initialUrl.length - 1)
         : widget.initialUrl;
     switch (action) {
       case 'home':

@@ -4,11 +4,7 @@ class OnlineChapter {
   final String url;
   final String host;
 
-  const OnlineChapter({
-    required this.name,
-    required this.url,
-    this.host = '',
-  });
+  const OnlineChapter({required this.name, required this.url, this.host = ''});
 
   factory OnlineChapter.fromJson(Map<String, dynamic> json) => OnlineChapter(
     name: json['name'] ?? '',
@@ -16,11 +12,7 @@ class OnlineChapter {
     host: json['host'] ?? '',
   );
 
-  Map<String, dynamic> toJson() => {
-    'name': name,
-    'url': url,
-    'host': host,
-  };
+  Map<String, dynamic> toJson() => {'name': name, 'url': url, 'host': host};
 }
 
 /// Nội dung chương truyện chữ
@@ -41,10 +33,7 @@ class ComicContent {
   final String title;
   final List<ComicPage> pages;
 
-  const ComicContent({
-    required this.title,
-    required this.pages,
-  });
+  const ComicContent({required this.title, required this.pages});
 }
 
 /// Một trang ảnh truyện tranh
@@ -52,16 +41,15 @@ class ComicPage {
   final String link;
   final List<String> fallback;
 
-  const ComicPage({
-    required this.link,
-    this.fallback = const [],
-  });
+  const ComicPage({required this.link, this.fallback = const []});
 
   factory ComicPage.fromJson(Map<String, dynamic> json) => ComicPage(
     link: json['link'] ?? json['src'] ?? '',
-    fallback: (json['fallback'] as List<dynamic>?)
-        ?.map((e) => e.toString())
-        .toList() ?? [],
+    fallback:
+        (json['fallback'] as List<dynamic>?)
+            ?.map((e) => e.toString())
+            .toList() ??
+        [],
   );
 }
 
@@ -121,11 +109,12 @@ class SourceStoryItem {
     this.host = '',
   });
 
-  factory SourceStoryItem.fromJson(Map<String, dynamic> json) => SourceStoryItem(
-    name: json['name'] ?? '',
-    link: json['link'] ?? '',
-    cover: json['cover'] ?? '',
-    description: json['description'] ?? '',
-    host: json['host'] ?? '',
-  );
+  factory SourceStoryItem.fromJson(Map<String, dynamic> json) =>
+      SourceStoryItem(
+        name: json['name'] ?? '',
+        link: json['link'] ?? '',
+        cover: json['cover'] ?? '',
+        description: json['description'] ?? '',
+        host: json['host'] ?? '',
+      );
 }

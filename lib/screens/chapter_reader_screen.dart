@@ -55,7 +55,8 @@ class _ChapterReaderScreenState extends State<ChapterReaderScreen> {
   @override
   void initState() {
     super.initState();
-    _currentIndex = widget.initialChapterIndex ?? widget.story.savedChapterIndex;
+    _currentIndex =
+        widget.initialChapterIndex ?? widget.story.savedChapterIndex;
     _loadEpub();
     _scrollController.addListener(_onScroll);
     _setupTtsListener();
@@ -64,7 +65,9 @@ class _ChapterReaderScreenState extends State<ChapterReaderScreen> {
   void _setupTtsListener() {
     TtsService.instance.addListener(_onTtsStateChange);
     TtsService.instance.onChapterChangeRequested = (nextChapterIndex) async {
-      debugPrint('[ChapterReader] TTS requested chapter change to $nextChapterIndex');
+      debugPrint(
+        '[ChapterReader] TTS requested chapter change to $nextChapterIndex',
+      );
       if (nextChapterIndex >= 0 && nextChapterIndex < _chapters.length) {
         await _goToChapter(nextChapterIndex, smooth: false, stopTts: false);
         if (mounted && _chapters.isNotEmpty) {
@@ -93,7 +96,9 @@ class _ChapterReaderScreenState extends State<ChapterReaderScreen> {
 
   void _scrollToParagraph(int index) {
     if (!_scrollController.hasClients || _chapters.isEmpty) return;
-    final paragraphs = TtsService.parseParagraphs(_chapters[_currentIndex].plain);
+    final paragraphs = TtsService.parseParagraphs(
+      _chapters[_currentIndex].plain,
+    );
     if (paragraphs.isEmpty) return;
 
     final maxScroll = _scrollController.position.maxScrollExtent;
@@ -108,7 +113,6 @@ class _ChapterReaderScreenState extends State<ChapterReaderScreen> {
       curve: Curves.easeInOut,
     );
   }
-
 
   Future<void> _speakText(String text, {required bool selection}) async {
     if (selection) {
@@ -160,7 +164,8 @@ class _ChapterReaderScreenState extends State<ChapterReaderScreen> {
       await _recordCurrentHistory();
       await _refreshBookmarkState();
 
-      if (widget.initialScrollOffset != null || widget.initialParagraphIndex != null) {
+      if (widget.initialScrollOffset != null ||
+          widget.initialParagraphIndex != null) {
         WidgetsBinding.instance.addPostFrameCallback((_) {
           _scrollToBookmarkPosition(
             scrollOffset: widget.initialScrollOffset,
@@ -315,7 +320,11 @@ class _ChapterReaderScreenState extends State<ChapterReaderScreen> {
     }
   }
 
-  Future<void> _goToChapter(int index, {bool smooth = true, bool stopTts = true}) async {
+  Future<void> _goToChapter(
+    int index, {
+    bool smooth = true,
+    bool stopTts = true,
+  }) async {
     if (index < 0 || index >= _chapters.length || index == _currentIndex) {
       return;
     }
@@ -407,7 +416,10 @@ class _ChapterReaderScreenState extends State<ChapterReaderScreen> {
     setState(() => _isCurrentBookmarked = bookmarked);
   }
 
-  Future<void> _toggleBookmark({int? targetParagraphIndex, String? targetSnippet}) async {
+  Future<void> _toggleBookmark({
+    int? targetParagraphIndex,
+    String? targetSnippet,
+  }) async {
     if (_chapters.isEmpty) return;
     final (pIdx, pSnippet) = targetParagraphIndex != null
         ? (targetParagraphIndex, targetSnippet ?? '')
@@ -424,7 +436,9 @@ class _ChapterReaderScreenState extends State<ChapterReaderScreen> {
     setState(() => _isCurrentBookmarked = added);
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
-        content: Text(added ? 'Đã thêm bookmark (Đoạn ${pIdx + 1})' : 'Đã bỏ bookmark'),
+        content: Text(
+          added ? 'Đã thêm bookmark (Đoạn ${pIdx + 1})' : 'Đã bỏ bookmark',
+        ),
         duration: const Duration(milliseconds: 1100),
       ),
     );
@@ -474,7 +488,6 @@ class _ChapterReaderScreenState extends State<ChapterReaderScreen> {
   }
 
   Future<void> _speakSelection(String selectedText) async {
-
     if (_chapters.isEmpty) return;
     final currentText = _chapters[_currentIndex].plain;
     await TtsService.instance.speakFromSelection(
@@ -492,8 +505,6 @@ class _ChapterReaderScreenState extends State<ChapterReaderScreen> {
       },
     );
   }
-
-
 
   void _showSelectionSearch(String selectedText) {
     if (_chapters.isEmpty) return;
@@ -539,7 +550,10 @@ class _ChapterReaderScreenState extends State<ChapterReaderScreen> {
     double targetOffset = 0.0;
     if (scrollOffset != null && scrollOffset > 0) {
       targetOffset = scrollOffset;
-    } else if (paragraphIndex != null && paragraphIndex > 0 && _chapters.isNotEmpty && _currentIndex < _chapters.length) {
+    } else if (paragraphIndex != null &&
+        paragraphIndex > 0 &&
+        _chapters.isNotEmpty &&
+        _currentIndex < _chapters.length) {
       final plainText = _chapters[_currentIndex].plain;
       final paragraphs = plainText
           .split(RegExp(r'\r?\n+'))
@@ -547,7 +561,10 @@ class _ChapterReaderScreenState extends State<ChapterReaderScreen> {
           .where((p) => p.isNotEmpty)
           .toList();
       if (paragraphs.isNotEmpty) {
-        final ratio = (paragraphIndex / (paragraphs.length - 1)).clamp(0.0, 1.0);
+        final ratio = (paragraphIndex / (paragraphs.length - 1)).clamp(
+          0.0,
+          1.0,
+        );
         targetOffset = ratio * maxScroll;
       }
     }
@@ -600,8 +617,6 @@ class _ChapterReaderScreenState extends State<ChapterReaderScreen> {
       ),
     );
   }
-
-
 
   Future<void> _speakCurrentChapter() async {
     if (_chapters.isEmpty) return;
@@ -735,35 +750,43 @@ class _ChapterReaderScreenState extends State<ChapterReaderScreen> {
                           padding: const EdgeInsets.symmetric(horizontal: 20),
                           child: Builder(
                             builder: (context) {
-                              final parsedParagraphs = TtsService.parseParagraphs(
-                                ch.plain,
-                                chapterIndex: _currentIndex,
-                              );
+                              final parsedParagraphs =
+                                  TtsService.parseParagraphs(
+                                    ch.plain,
+                                    chapterIndex: _currentIndex,
+                                  );
                               return Column(
                                 crossAxisAlignment: CrossAxisAlignment.start,
-                                children: List.generate(parsedParagraphs.length, (i) {
-                                  final p = parsedParagraphs[i];
-                                  return _ParagraphWidget(
-                                    key: ValueKey('ch_${_currentIndex}_p_$i'),
-                                    paragraphIndex: i,
-                                    chapterIndex: _currentIndex,
-                                    text: p.text,
-                                    style: settings.bodyTextStyle,
-                                    onNote: _saveSelectionNote,
-                                    onSpeak: (selectedText) =>
-                                        _speakSelectionFromParagraph(selectedText, i),
-                                    onSelectionSpeak: (selectedText, start, end) =>
-                                        _speakSelectionFromParagraph(
-                                      selectedText,
-                                      i,
-                                      start: start,
-                                      end: end,
-                                    ),
-                                    onSearch: _showSelectionSearch,
-                                    onSettings: (_) => _showSettings(),
-                                    onShare: _shareSelection,
-                                  );
-                                }),
+                                children: List.generate(
+                                  parsedParagraphs.length,
+                                  (i) {
+                                    final p = parsedParagraphs[i];
+                                    return _ParagraphWidget(
+                                      key: ValueKey('ch_${_currentIndex}_p_$i'),
+                                      paragraphIndex: i,
+                                      chapterIndex: _currentIndex,
+                                      text: p.text,
+                                      style: settings.bodyTextStyle,
+                                      onNote: _saveSelectionNote,
+                                      onSpeak: (selectedText) =>
+                                          _speakSelectionFromParagraph(
+                                            selectedText,
+                                            i,
+                                          ),
+                                      onSelectionSpeak:
+                                          (selectedText, start, end) =>
+                                              _speakSelectionFromParagraph(
+                                                selectedText,
+                                                i,
+                                                start: start,
+                                                end: end,
+                                              ),
+                                      onSearch: _showSelectionSearch,
+                                      onSettings: (_) => _showSettings(),
+                                      onShare: _shareSelection,
+                                    );
+                                  },
+                                ),
                               );
                             },
                           ),
@@ -1077,7 +1100,8 @@ class _ChapterReaderScreenState extends State<ChapterReaderScreen> {
                                 TtsControlSheet.show(
                                   context,
                                   textContent: _chapters[_currentIndex].plain,
-                                  onNextChapter: _currentIndex < _chapters.length - 1
+                                  onNextChapter:
+                                      _currentIndex < _chapters.length - 1
                                       ? () => _goToChapter(_currentIndex + 1)
                                       : null,
                                 );
@@ -1097,8 +1121,6 @@ class _ChapterReaderScreenState extends State<ChapterReaderScreen> {
     );
   }
 }
-
-
 
 class _SelectionSearchSheet extends StatelessWidget {
   final String query;
@@ -1774,9 +1796,11 @@ class _ParagraphWidget extends StatelessWidget {
       listenable: TtsService.instance,
       builder: (context, _) {
         final tts = TtsService.instance;
-        final isCurrent = (tts.isPlaying || tts.isPaused) &&
+        final isCurrent =
+            (tts.isPlaying || tts.isPaused) &&
             tts.currentParagraphIndex == paragraphIndex &&
-            (tts.currentChapterIndex == null || tts.currentChapterIndex == chapterIndex);
+            (tts.currentChapterIndex == null ||
+                tts.currentChapterIndex == chapterIndex);
 
         final colorScheme = Theme.of(context).colorScheme;
         final highlightColor = isCurrent
@@ -1812,4 +1836,3 @@ class _ParagraphWidget extends StatelessWidget {
     );
   }
 }
-

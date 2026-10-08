@@ -2,6 +2,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart' as firebase_auth;
 import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter/foundation.dart';
+import 'package:google_sign_in/google_sign_in.dart';
 
 import '../firebase_config.dart';
 import '../models/app_user.dart';
@@ -23,6 +24,31 @@ class FirebaseBackendService {
   static FirebaseFirestore get _db => FirebaseFirestore.instance;
   static firebase_auth.FirebaseAuth get _auth =>
       firebase_auth.FirebaseAuth.instance;
+      
+  static final GoogleSignIn _googleSignIn = GoogleSignIn(
+    scopes: [
+      'email',
+      'https://www.googleapis.com/auth/drive',
+    ],
+  );
+
+  static Future<String?> getGoogleDriveAccessToken() async {
+    if (!_initialized) return null;
+    final currentUser = _googleSignIn.currentUser;
+    if (currentUser != null) {
+      final auth = await currentUser.authentication;
+      return auth.accessToken;
+    }
+    // Try silently
+    try {
+      final account = await _googleSignIn.signInSilently();
+      if (account != null) {
+        final auth = await account.authentication;
+        return auth.accessToken;
+      }
+    } catch (_) {}
+    return null;
+  }
 
   static Stream<String?> get idTokenUidChanges {
     if (!_initialized) return const Stream<String?>.empty();
@@ -32,6 +58,11 @@ class FirebaseBackendService {
   static String? get currentAuthUserId {
     if (!_initialized) return null;
     return _auth.currentUser?.uid;
+  }
+
+  static firebase_auth.User? get currentUser {
+    if (!_initialized) return null;
+    return _auth.currentUser;
   }
 
   static Future<void> initialize() async {
@@ -118,7 +149,11 @@ class FirebaseBackendService {
       await user.updateDisplayName(displayName);
       await user.reload();
       final refreshedUser = _auth.currentUser ?? user;
-      await _upsertProfile(refreshedUser, displayName: displayName);
+      try {
+        await _upsertProfile(refreshedUser, displayName: displayName);
+      } catch (e) {
+        debugPrint('Lỗi cập nhật profile sau khi register: $e');
+      }
       await refreshedUser.sendEmailVerification();
       return _appUserFromFirebase(refreshedUser);
     } on firebase_auth.FirebaseAuthException catch (e) {
@@ -151,7 +186,11 @@ class FirebaseBackendService {
       }
 
       await _refreshVerifiedToken(refreshedUser);
-      await _upsertProfile(refreshedUser);
+      try {
+        await _upsertProfile(refreshedUser);
+      } catch (e) {
+        debugPrint('Lỗi cập nhật profile sau khi login: $e');
+      }
       return _appUserFromFirebase(refreshedUser);
     } on firebase_auth.FirebaseAuthException catch (e) {
       throw Exception(_authErrorMessage(e));
@@ -204,6 +243,39 @@ class FirebaseBackendService {
     }
   }
 
+  static Future<AppUser> loginWithGoogle() async {
+    _ensureReady();
+    try {
+      final GoogleSignInAccount? googleUser = await _googleSignIn.signIn();
+      if (googleUser == null) {
+        throw Exception('Đăng nhập Google bị hủy bỏ.');
+      }
+      final GoogleSignInAuthentication googleAuth =
+          await googleUser.authentication;
+      final firebase_auth.AuthCredential credential =
+          firebase_auth.GoogleAuthProvider.credential(
+        accessToken: googleAuth.accessToken,
+        idToken: googleAuth.idToken,
+      );
+      final userCredential = await _auth.signInWithCredential(credential);
+      final user = userCredential.user;
+      if (user == null) {
+        throw Exception('Lỗi xác thực Google.');
+      }
+      try {
+        await _upsertProfile(user);
+      } catch (e) {
+        debugPrint('Lỗi cập nhật profile sau khi Google login: $e');
+      }
+      return _appUserFromFirebase(user);
+    } on firebase_auth.FirebaseAuthException catch (e) {
+      throw Exception(_authErrorMessage(e));
+    } catch (e) {
+      debugPrint('Google Sign-In Error: $e');
+      throw Exception('Đăng nhập Google thất bại: $e');
+    }
+  }
+
   static Future<AppUser> confirmEmailVerified({required String email}) async {
     _ensureReady();
     final user = _auth.currentUser;
@@ -223,7 +295,11 @@ class FirebaseBackendService {
     }
 
     await _refreshVerifiedToken(refreshedUser);
-    await _upsertProfile(refreshedUser);
+    try {
+      await _upsertProfile(refreshedUser);
+    } catch (e) {
+      debugPrint('Lỗi cập nhật profile sau khi verify email: $e');
+    }
     return _appUserFromFirebase(refreshedUser);
   }
 
@@ -267,6 +343,12 @@ class FirebaseBackendService {
 
   static Future<void> logout() async {
     if (_initialized) {
+      try {
+        await _googleSignIn.disconnect();
+      } catch (_) {}
+      try {
+        await _googleSignIn.signOut();
+      } catch (_) {}
       await _auth.signOut();
     }
   }
@@ -361,6 +443,25 @@ class FirebaseBackendService {
       'scrollOffset': 0,
       'updatedAt': FieldValue.serverTimestamp(),
     };
+  }
+
+  static Future<void> syncLibraryBatch(List<Story> stories) async {
+    if (!_initialized || stories.isEmpty) return;
+    final user = _auth.currentUser;
+    if (user == null || !user.emailVerified) return;
+
+    final batch = _db.batch();
+    final colRef = _db.collection('users').doc(user.uid).collection('library');
+    
+    for (final story in stories) {
+      batch.set(colRef.doc(story.id), buildLibraryStoryPayload(story), SetOptions(merge: true));
+    }
+    
+    try {
+      await batch.commit();
+    } catch (e) {
+      debugPrint('FirebaseBackendService.syncLibraryBatch error: \$e');
+    }
   }
 
   static Future<void> syncStoryToLibrary(Story story) async {
@@ -537,6 +638,25 @@ class FirebaseBackendService {
     final text = value?.toString() ?? '';
     if (text.trim().isNotEmpty) return text;
     return DateTime.now().toIso8601String();
+  }
+
+  static Future<void> syncBookmarksBatch(List<ReadingMarker> markers) async {
+    if (!_initialized || markers.isEmpty) return;
+    final user = _auth.currentUser;
+    if (user == null) return;
+    
+    final batch = _db.batch();
+    final colRef = _db.collection('users').doc(user.uid).collection('bookmarks');
+    
+    for (final marker in markers) {
+      batch.set(colRef.doc(marker.id), marker.toJson(), SetOptions(merge: true));
+    }
+    
+    try {
+      await batch.commit();
+    } catch (e) {
+      debugPrint('FirebaseBackendService.syncBookmarksBatch error: \$e');
+    }
   }
 
   static Future<void> saveCloudBookmark(ReadingMarker marker) async {
