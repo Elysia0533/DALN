@@ -7,7 +7,6 @@ list(APPEND FLUTTER_PLUGIN_LIST
   firebase_auth
   firebase_core
   flutter_tts
-  quickjs_engine
   share_plus
   syncfusion_pdfviewer_windows
   url_launcher_windows

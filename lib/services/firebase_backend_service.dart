@@ -26,6 +26,7 @@ class FirebaseBackendService {
       firebase_auth.FirebaseAuth.instance;
       
   static final GoogleSignIn _googleSignIn = GoogleSignIn(
+    serverClientId: VBookFirebaseConfig.webClientId.isEmpty ? null : VBookFirebaseConfig.webClientId,
     scopes: [
       'email',
       'https://www.googleapis.com/auth/drive',

@@ -33,6 +33,10 @@ class VBookFirebaseConfig {
     'FIREBASE_IOS_BUNDLE_ID',
   );
 
+  static const String webClientId = String.fromEnvironment(
+    'FIREBASE_WEB_CLIENT_ID',
+  );
+
   static String get apiKey =>
       _firstNonEmpty([_firebaseApiKey, _firebaseAndroidApiKey]);
   static String get appId => _firstNonEmpty([_firebaseAppId, _googleAppId]);

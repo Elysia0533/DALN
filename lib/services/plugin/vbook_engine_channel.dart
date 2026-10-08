@@ -1,9 +1,7 @@
-import 'dart:convert';
-import 'dart:io';
-
 import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart';
+
 import '../../models/source_models.dart';
-import 'vbook_dart_engine.dart';
 
 class VBookEngineException implements Exception {
   const VBookEngineException({
@@ -20,196 +18,185 @@ class VBookEngineException implements Exception {
   String toString() => message;
 }
 
-class _SourceContext {
-  final String dirPath;
-  final Map<String, String> scripts;
-  _SourceContext(this.dirPath, this.scripts);
-}
-
 class VBookEngineChannel {
-  static final Map<String, _SourceContext> _sources = {};
+  static const MethodChannel _channel = MethodChannel(
+    'com.vbook.reader/vbook_engine',
+  );
 
-  static Future<bool> loadSource(String id, String dirPath) async {
-    try {
-      final pluginFile = File('$dirPath/plugin.json');
-      if (!await pluginFile.exists()) return false;
-      
-      final jsonStr = await pluginFile.readAsString();
-      final pluginData = jsonDecode(jsonStr);
-      final scriptsMap = pluginData['scripts'] as Map<String, dynamic>? ?? {};
-      
-      final scripts = <String, String>{};
-      for (final entry in scriptsMap.entries) {
-        final scriptFileName = entry.value.toString();
-        final scriptFile = File('$dirPath/src/$scriptFileName');
-        if (await scriptFile.exists()) {
-          final content = await scriptFile.readAsString();
-          // We decrypt using empty keys for now unless JsLoader implements something else
-          // But since JsLoader is removed/refactored, we just read raw string.
-          // Wait, JsLoader.decryptScript might be used here, but for now we just use content.
-          scripts[entry.key] = content; 
-        }
-      }
-      
-      _sources[id] = _SourceContext(dirPath, scripts);
-      return true;
-    } catch (e) {
-      debugPrint('[VBookEngineChannel] loadSource error: $e');
-      return false;
-    }
+  /// Loads a vBook plugin from a directory on disk.
+  /// [id] is the unique string identifier per plugin (e.g. plugin.id).
+  static Future<bool> loadSource(String id, String dirPath) {
+    return _guard('loadSource', () async {
+      final result = await _channel.invokeMethod<bool>('loadSource', {
+        'id': id,
+        'dirPath': dirPath,
+      });
+      return _requireResult(result, 'loadSource');
+    });
   }
 
-  static Future<dynamic> _executeScript(
-    String operation,
-    String id,
-    String scriptKey,
-    String method,
-    List<dynamic> args,
-  ) async {
-    final context = _sources[id];
-    if (context == null) throw _fromPlatformException(operation, 'NOT_LOADED');
-    final scriptCode = context.scripts[scriptKey];
-    if (scriptCode == null) throw _invalidResponse(operation);
-
-    try {
-      final jsonResult = await VBookDartEngine.execute(
-        context.dirPath,
-        method,
-        args,
-        scriptCode: scriptCode,
+  static Future<MangasPage?> getPopularManga(String id, int page) {
+    return _guard('getPopularManga', () async {
+      final result = await _channel.invokeMapMethod<String, dynamic>(
+        'getPopularManga',
+        {'id': id, 'page': page},
       );
-      if (jsonResult == null) throw _invalidResponse(operation);
-      
-      final result = jsonDecode(jsonResult.toString());
-      if (result['ok'] == true) {
-        return result['data'];
-      } else {
-        debugPrint('[VBookEngineChannel] JS Error: \${result["error"]}');
-        throw _fromPlatformException(operation, 'JS_ERROR');
-      }
-    } catch (e) {
-      if (e is VBookEngineException) rethrow;
-      debugPrint('[VBookEngineChannel] Execution error: \$e');
-      throw _fromPlatformException(operation, 'EXEC_ERROR');
-    }
+      return _parseMangasPage(
+        _requireResult(result, 'getPopularManga'),
+        'getPopularManga',
+      );
+    });
   }
 
-  static Future<MangasPage?> getPopularManga(String id, int page) async {
-    final result = await _executeScript('getPopularManga', id, 'home', 'execute', ['']); 
-    return _parseMangasPage(_requireResult(result, 'getPopularManga'), 'getPopularManga');
+  static Future<MangasPage?> getLatestUpdates(String id, int page) {
+    return _guard('getLatestUpdates', () async {
+      final result = await _channel.invokeMapMethod<String, dynamic>(
+        'getLatestUpdates',
+        {'id': id, 'page': page},
+      );
+      return _parseMangasPage(
+        _requireResult(result, 'getLatestUpdates'),
+        'getLatestUpdates',
+      );
+    });
   }
 
-  static Future<MangasPage?> getLatestUpdates(String id, int page) async {
-    final result = await _executeScript('getLatestUpdates', id, 'latest', 'execute', ['']);
-    return _parseMangasPage(_requireResult(result, 'getLatestUpdates'), 'getLatestUpdates');
+  static Future<MangasPage?> getSearchManga(String id, String query, int page) {
+    return _guard('getSearchManga', () async {
+      final result = await _channel.invokeMapMethod<String, dynamic>(
+        'getSearchManga',
+        {'id': id, 'query': query, 'page': page},
+      );
+      return _parseMangasPage(
+        _requireResult(result, 'getSearchManga'),
+        'getSearchManga',
+      );
+    });
   }
 
-  static Future<MangasPage?> getSearchManga(String id, String query, int page) async {
-    final result = await _executeScript('getSearchManga', id, 'search', 'execute', [query, page]);
-    return _parseMangasPage(_requireResult(result, 'getSearchManga'), 'getSearchManga');
-  }
-
-  static Future<SManga?> getMangaDetails(String id, String url) async {
-    final result = await _executeScript('getMangaDetails', id, 'detail', 'execute', [url]);
-    if (result == null) return null;
-    
-    final manga = SManga.create();
-    manga.url = url;
-    
-    if (result is Map) {
-      manga.title = result['name']?.toString() ?? result['title']?.toString() ?? '';
+  static Future<SManga?> getMangaDetails(String id, String url) {
+    return _guard('getMangaDetails', () async {
+      final result = _requireResult(
+        await _channel.invokeMapMethod<String, dynamic>('getMangaDetails', {
+          'id': id,
+          'url': url,
+        }),
+        'getMangaDetails',
+      );
+      final manga = SManga.create();
+      manga.url = url;
+      manga.title = result['title']?.toString() ?? '';
       manga.author = result['author']?.toString() ?? '';
       manga.artist = result['artist']?.toString() ?? '';
-      manga.description = result['description']?.toString() ?? result['subTitle']?.toString() ?? result['chap']?.toString() ?? '';
+      manga.description = result['description']?.toString() ?? '';
       manga.genre = result['genre']?.toString() ?? '';
       manga.status = (result['status'] as num?)?.toInt() ?? SManga.unknown;
-      manga.thumbnailUrl = result['cover']?.toString() ?? result['img']?.toString() ?? result['thumbnail_url']?.toString() ?? '';
-    }
-    
-    manga.initialized = true;
-    return manga;
+      manga.thumbnailUrl = result['thumbnail_url']?.toString() ?? '';
+      manga.initialized = true;
+      return manga;
+    });
   }
 
-  static Future<List<SChapter>> getChapterList(String id, String url) async {
-    final result = await _executeScript('getChapterList', id, 'chapter', 'execute', [url]);
-    
-    List listResult = [];
-    if (result is List) {
-      listResult = result;
-    } else if (result is Map && result['data'] is List) {
-      listResult = result['data'] as List;
-    } else {
-      throw _invalidResponse('getChapterList');
-    }
-    
-    return listResult.map((item) {
-      final chapterData = Map<String, dynamic>.from(item as Map);
-      final chapter = SChapter();
-      chapter.url = chapterData['url']?.toString() ?? chapterData['link']?.toString() ?? '';
-      chapter.name = chapterData['name']?.toString() ?? chapterData['title']?.toString() ?? '';
-      chapter.dateUpload = (chapterData['date_upload'] as num?)?.toInt() ?? 0;
-      return chapter;
-    }).toList();
+  static Future<List<SChapter>> getChapterList(String id, String url) {
+    return _guard('getChapterList', () async {
+      final result = _requireResult(
+        await _channel.invokeListMethod<dynamic>('getChapterList', {
+          'id': id,
+          'url': url,
+        }),
+        'getChapterList',
+      );
+      return result.map((item) {
+        final chapterData = Map<String, dynamic>.from(item as Map);
+        final chapter = SChapter();
+        chapter.url = chapterData['url']?.toString() ?? '';
+        chapter.name = chapterData['name']?.toString() ?? '';
+        chapter.dateUpload = (chapterData['date_upload'] as num?)?.toInt() ?? 0;
+        return chapter;
+      }).toList();
+    });
   }
 
-  static Future<List<Page>> getPageList(String id, String url) async {
-    final result = await _executeScript('getPageList', id, 'page', 'execute', [url]);
-    
-    List listResult = [];
-    if (result is List) {
-      listResult = result;
-    } else if (result is Map && result['data'] is List) {
-      listResult = result['data'] as List;
-    } else {
-      throw _invalidResponse('getPageList');
-    }
-    
-    int index = 0;
-    return listResult.map((item) {
-      var imageUrl = '';
-      if (item is String) {
-        imageUrl = item;
-      } else if (item is Map) {
-        imageUrl = item['url']?.toString() ?? item['src']?.toString() ?? item['image']?.toString() ?? item['link']?.toString() ?? '';
-      }
-      return Page(index++, url, imageUrl);
-    }).toList();
+  static Future<List<Page>> getPageList(String id, String url) {
+    return _guard('getPageList', () async {
+      final result = _requireResult(
+        await _channel.invokeListMethod<dynamic>('getPageList', {
+          'id': id,
+          'url': url,
+        }),
+        'getPageList',
+      );
+      return result.map((item) {
+        final pageData = Map<String, dynamic>.from(item as Map);
+        return Page(
+          (pageData['index'] as num?)?.toInt() ?? 0,
+          pageData['url']?.toString() ?? '',
+          pageData['imageUrl']?.toString() ?? '',
+        );
+      }).toList();
+    });
   }
 
-  static Future<List<Map<String, String>>> getHomeTabs(String id) async {
-    final result = await _executeScript('getHomeTabs', id, 'gen', 'execute', []);
-    
-    List listResult = [];
-    if (result is List) {
-      listResult = result;
-    } else if (result is Map && result['data'] is List) {
-      listResult = result['data'] as List;
-    } else {
-      throw _invalidResponse('getHomeTabs');
-    }
-    
-    return listResult.map((item) {
-      final tab = Map<String, dynamic>.from(item as Map);
-      return {
-        'title': tab['title']?.toString() ?? '',
-        'input': tab['input']?.toString() ?? '',
-        'script': tab['script']?.toString() ?? '',
-      };
-    }).toList();
+  static Future<List<Map<String, String>>> getHomeTabs(String id) {
+    return _guard('getHomeTabs', () async {
+      final result = _requireResult(
+        await _channel.invokeListMethod<dynamic>('getHomeTabs', {'id': id}),
+        'getHomeTabs',
+      );
+      return result.map((item) {
+        final tab = Map<String, dynamic>.from(item as Map);
+        return {
+          'title': tab['title']?.toString() ?? '',
+          'input': tab['input']?.toString() ?? '',
+          'script': tab['script']?.toString() ?? '',
+        };
+      }).toList();
+    });
   }
 
   static Future<MangasPage?> getMangaListByTab(
     String id,
     String input,
-    String scriptKey,
+    String script,
     int page,
-  ) async {
-    final result = await _executeScript('getMangaListByTab', id, scriptKey, 'execute', [input, page]);
-    return _parseMangasPage(_requireResult(result, 'getMangaListByTab'), 'getMangaListByTab');
+  ) {
+    return _guard('getMangaListByTab', () async {
+      final result = await _channel.invokeMapMethod<String, dynamic>(
+        'getMangaListByTab',
+        {'id': id, 'input': input, 'script': script, 'page': page},
+      );
+      return _parseMangasPage(
+        _requireResult(result, 'getMangaListByTab'),
+        'getMangaListByTab',
+      );
+    });
   }
 
-  static Future<void> closeSource(String id) async {
-    _sources.remove(id);
+  static Future<void> closeSource(String id) {
+    return _guard('closeSource', () async {
+      await _channel.invokeMethod<void>('closeSource', {'id': id});
+    });
+  }
+
+  static Future<T> _guard<T>(
+    String operation,
+    Future<T> Function() action,
+  ) async {
+    try {
+      return await action();
+    } on VBookEngineException {
+      rethrow;
+    } on PlatformException catch (error) {
+      debugPrint(
+        '[VBookEngine] operation=$operation failed code=${error.code}',
+      );
+      throw _fromPlatformException(operation, error);
+    } catch (_) {
+      debugPrint(
+        '[VBookEngine] operation=$operation returned an invalid response',
+      );
+      throw _invalidResponse(operation);
+    }
   }
 
   static T _requireResult<T>(T? result, String operation) {
@@ -219,9 +206,9 @@ class VBookEngineChannel {
 
   static VBookEngineException _fromPlatformException(
     String operation,
-    String code,
+    PlatformException error,
   ) {
-    final message = switch (code) {
+    final message = switch (error.code) {
       'EXEC_TIMEOUT' =>
         'Extension execution timed out. Reload the source before retrying.',
       'NETWORK_ERROR' =>
@@ -239,7 +226,7 @@ class VBookEngineChannel {
       _ => 'The extension engine could not complete this request.',
     };
     return VBookEngineException(
-      code: code,
+      code: error.code,
       operation: operation,
       message: message,
     );
@@ -254,32 +241,21 @@ class VBookEngineChannel {
   }
 
   static MangasPage _parseMangasPage(
-    dynamic result,
+    Map<String, dynamic> result,
     String operation,
   ) {
-    List listResult = [];
-    if (result is List) {
-      listResult = result;
-    } else if (result is Map) {
-      final data = result['data'];
-      if (data is List) {
-        listResult = data;
-      } else {
-        throw _invalidResponse(operation);
-      }
-    } else {
-      throw _invalidResponse(operation);
-    }
-    
-    final mangas = listResult.map((item) {
+    final rawMangas = result['mangas'];
+    if (rawMangas is! List) throw _invalidResponse(operation);
+    final hasNext = result['hasNextPage'] as bool? ?? false;
+    final mangas = rawMangas.map((item) {
       final mangaData = Map<String, dynamic>.from(item as Map);
       final manga = SManga.create();
-      manga.url = mangaData['url']?.toString() ?? mangaData['link']?.toString() ?? '';
-      manga.title = mangaData['title']?.toString() ?? mangaData['name']?.toString() ?? '';
-      manga.thumbnailUrl = mangaData['thumbnail_url']?.toString() ?? mangaData['cover']?.toString() ?? mangaData['img']?.toString() ?? '';
+      manga.url = mangaData['url']?.toString() ?? '';
+      manga.title = mangaData['title']?.toString() ?? '';
+      manga.thumbnailUrl = mangaData['thumbnail_url']?.toString() ?? '';
       manga.description = mangaData['description']?.toString() ?? '';
       return manga;
     }).toList();
-    return MangasPage(mangas, false);
+    return MangasPage(mangas, hasNext);
   }
 }
