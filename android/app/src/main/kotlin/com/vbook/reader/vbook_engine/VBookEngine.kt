@@ -680,6 +680,7 @@ class VBookEngine(
         private val JS_IDENTIFIER = Regex("^[A-Za-z_$][A-Za-z0-9_$]*$")
     }
 
+    @androidx.annotation.Keep
     interface AndroidAppBridge {
         fun fetch(url: String, optionsJson: String): String
         fun fetchBase64(url: String, optionsJson: String): String

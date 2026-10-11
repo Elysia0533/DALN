@@ -9,6 +9,7 @@ import '../models/source_models.dart';
 import '../services/api_service.dart';
 import '../services/offline_download_service.dart';
 import '../widgets/story_cover_image.dart';
+import '../widgets/marquee_text.dart';
 import 'online_chapter_reader_screen.dart';
 import 'web_browser_screen.dart';
 
@@ -510,7 +511,7 @@ class _OnlineStoryDetailScreenState extends State<OnlineStoryDetailScreen> {
 
     return Scaffold(
       appBar: AppBar(
-        title: Text(title, style: const TextStyle(fontSize: 16)),
+        title: MarqueeText(title, style: const TextStyle(fontSize: 16)),
         actions: [
           if (!_isLoadingChapters && _chapters.isNotEmpty)
             IconButton(

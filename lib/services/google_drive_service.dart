@@ -39,9 +39,9 @@ class RequestConcurrencyLimiter {
 
   Future<T> run<T>(Future<T> Function() fn) async {
     await _acquire();
-    AppPerformanceLogger.log(
-      '[PERF][DRIVE] Active requests: $_activeRequests / $maxConcurrency',
-    );
+    // AppPerformanceLogger.log(
+    //   '[PERF][DRIVE] Active requests: $_activeRequests / $maxConcurrency',
+    // );
     try {
       return await fn();
     } finally {

@@ -12,6 +12,7 @@ import '../services/extension_service.dart';
 import '../theme/theme_provider.dart';
 import '../utils/file_name_utils.dart';
 import '../widgets/story_cover_image.dart';
+import '../widgets/marquee_text.dart';
 import '../widgets/background_download_banner.dart';
 import 'story_detail_screen.dart';
 import 'online_story_detail_screen.dart';
@@ -495,15 +496,14 @@ class _HomeScreenState extends State<HomeScreen> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text(
+                    MarqueeText(
                       story.title,
                       style: TextStyle(
                         color: colorScheme.onSurface,
                         fontWeight: FontWeight.w700,
                         fontSize: 14,
                       ),
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis,
+                      height: 18,
                     ),
                     const SizedBox(height: 4),
                     Text(
@@ -583,16 +583,15 @@ class _HomeScreenState extends State<HomeScreen> {
             ),
           ),
           const SizedBox(height: 6),
-          Text(
+          MarqueeText(
             story.title,
-            maxLines: 2,
-            overflow: TextOverflow.ellipsis,
             style: TextStyle(
               color: colorScheme.onSurface,
               fontWeight: FontWeight.w700,
               fontSize: 13,
               height: 1.22,
             ),
+            height: 16,
           ),
         ],
       ),

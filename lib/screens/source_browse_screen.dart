@@ -7,6 +7,7 @@ import '../services/extension_service.dart';
 import '../services/search/extension_search_service.dart';
 import '../models/source_models.dart';
 import '../widgets/story_cover_image.dart';
+import '../widgets/marquee_text.dart';
 import 'online_story_detail_screen.dart';
 import 'web_browser_screen.dart';
 import 'extension_screen.dart';
@@ -585,13 +586,13 @@ class _SourceBrowseScreenState extends State<SourceBrowseScreen> {
                     mainAxisSize: MainAxisSize.min,
                     children: [
                       Flexible(
-                        child: Text(
+                        child: MarqueeText(
                           _currentPlugin.name,
                           style: const TextStyle(
                             fontWeight: FontWeight.bold,
                             fontSize: 18,
                           ),
-                          overflow: TextOverflow.ellipsis,
+                          height: 24,
                         ),
                       ),
                       const SizedBox(width: 4),
@@ -768,14 +769,13 @@ class _SourceBrowseScreenState extends State<SourceBrowseScreen> {
                 ),
               ),
               const SizedBox(height: 6),
-              Text(
+              MarqueeText(
                 story.title,
-                maxLines: 2,
-                overflow: TextOverflow.ellipsis,
                 style: const TextStyle(
                   fontSize: 12.5,
                   fontWeight: FontWeight.bold,
                 ),
+                height: 16,
               ),
               if (story.description.isNotEmpty) ...[
                 const SizedBox(height: 2),
@@ -833,14 +833,13 @@ class _SourceBrowseScreenState extends State<SourceBrowseScreen> {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text(
+                      MarqueeText(
                         story.title,
-                        maxLines: 2,
-                        overflow: TextOverflow.ellipsis,
                         style: const TextStyle(
                           fontSize: 14,
                           fontWeight: FontWeight.bold,
                         ),
+                        height: 18,
                       ),
                       if (story.description.isNotEmpty) ...[
                         const SizedBox(height: 6),
