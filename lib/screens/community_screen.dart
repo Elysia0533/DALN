@@ -36,8 +36,9 @@ class _CommunityScreenState extends State<CommunityScreen> {
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
-    final user = context.watch<UserProvider>();
-    final loadToken = user.isLoggedIn ? user.token : 'guest';
+    final loadToken = context.select<UserProvider, String>(
+      (user) => user.isLoggedIn ? user.token : 'guest',
+    );
     if (_loadedToken != loadToken) {
       _loadedToken = loadToken;
       WidgetsBinding.instance.addPostFrameCallback((_) {

@@ -43,6 +43,12 @@ class _GlossaryEditorSheetState extends State<GlossaryEditorSheet> with SingleTi
     _loadData();
   }
 
+  @override
+  void dispose() {
+    _tabController.dispose();
+    super.dispose();
+  }
+
   Future<void> _loadData() async {
     _profile = await _db.getProfile(widget.profileId);
     _terms = await _db.getTermsByProfile(widget.profileId);
@@ -56,8 +62,9 @@ class _GlossaryEditorSheetState extends State<GlossaryEditorSheet> with SingleTi
     final noteCtrl = TextEditingController();
     var type = GlossaryType.character;
 
-    await showDialog(
-      context: context,
+    try {
+      await showDialog(
+        context: context,
       builder: (ctx) => StatefulBuilder(
         builder: (ctx, setDialogState) => AlertDialog(
           title: const Text('Thêm thuật ngữ / Tên riêng'),
@@ -117,6 +124,11 @@ class _GlossaryEditorSheetState extends State<GlossaryEditorSheet> with SingleTi
         ),
       ),
     );
+    } finally {
+      srcCtrl.dispose();
+      tgtCtrl.dispose();
+      noteCtrl.dispose();
+    }
   }
 
   Future<void> _addAddressRuleDialog() async {
@@ -125,59 +137,66 @@ class _GlossaryEditorSheetState extends State<GlossaryEditorSheet> with SingleTi
     final selfCtrl = TextEditingController();
     final otherCtrl = TextEditingController();
 
-    await showDialog(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Thêm quy tắc xưng hô'),
-        content: SingleChildScrollView(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              TextField(
-                controller: speakerCtrl,
-                decoration: const InputDecoration(labelText: 'Người nói (vd: Lâm Phong)'),
-              ),
-              const SizedBox(height: 8),
-              TextField(
-                controller: listenerCtrl,
-                decoration: const InputDecoration(labelText: 'Người nghe (vd: Tô Tuyết)'),
-              ),
-              const SizedBox(height: 8),
-              TextField(
-                controller: selfCtrl,
-                decoration: const InputDecoration(labelText: 'Tự xưng (vd: ta, anh, tôi)'),
-              ),
-              const SizedBox(height: 8),
-              TextField(
-                controller: otherCtrl,
-                decoration: const InputDecoration(labelText: 'Gọi đối phương (vd: nàng, em, cô)'),
-              ),
-            ],
+    try {
+      await showDialog(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text('Thêm quy tắc xưng hô'),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                TextField(
+                  controller: speakerCtrl,
+                  decoration: const InputDecoration(labelText: 'Người nói (vd: Lâm Phong)'),
+                ),
+                const SizedBox(height: 8),
+                TextField(
+                  controller: listenerCtrl,
+                  decoration: const InputDecoration(labelText: 'Người nghe (vd: Tô Tuyết)'),
+                ),
+                const SizedBox(height: 8),
+                TextField(
+                  controller: selfCtrl,
+                  decoration: const InputDecoration(labelText: 'Tự xưng (vd: ta, anh, tôi)'),
+                ),
+                const SizedBox(height: 8),
+                TextField(
+                  controller: otherCtrl,
+                  decoration: const InputDecoration(labelText: 'Gọi đối phương (vd: nàng, em, cô)'),
+                ),
+              ],
+            ),
           ),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Hủy')),
+            FilledButton(
+              style: FilledButton.styleFrom(backgroundColor: Colors.pinkAccent),
+              onPressed: () async {
+                if (speakerCtrl.text.trim().isEmpty || listenerCtrl.text.trim().isEmpty) return;
+                final rule = AddressRule(
+                  id: 'addr_${DateTime.now().microsecondsSinceEpoch}',
+                  profileId: widget.profileId,
+                  speaker: speakerCtrl.text.trim(),
+                  listener: listenerCtrl.text.trim(),
+                  selfRef: selfCtrl.text.trim(),
+                  otherRef: otherCtrl.text.trim(),
+                );
+                await _db.saveAddressRule(rule);
+                if (ctx.mounted) Navigator.pop(ctx);
+                _loadData();
+              },
+              child: const Text('Lưu'),
+            ),
+          ],
         ),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Hủy')),
-          FilledButton(
-            style: FilledButton.styleFrom(backgroundColor: Colors.pinkAccent),
-            onPressed: () async {
-              if (speakerCtrl.text.trim().isEmpty || listenerCtrl.text.trim().isEmpty) return;
-              final rule = AddressRule(
-                id: 'addr_${DateTime.now().microsecondsSinceEpoch}',
-                profileId: widget.profileId,
-                speaker: speakerCtrl.text.trim(),
-                listener: listenerCtrl.text.trim(),
-                selfRef: selfCtrl.text.trim(),
-                otherRef: otherCtrl.text.trim(),
-              );
-              await _db.saveAddressRule(rule);
-              if (ctx.mounted) Navigator.pop(ctx);
-              _loadData();
-            },
-            child: const Text('Lưu'),
-          ),
-        ],
-      ),
-    );
+      );
+    } finally {
+      speakerCtrl.dispose();
+      listenerCtrl.dispose();
+      selfCtrl.dispose();
+      otherCtrl.dispose();
+    }
   }
 
   void _exportJson() {
@@ -197,56 +216,60 @@ class _GlossaryEditorSheetState extends State<GlossaryEditorSheet> with SingleTi
 
   Future<void> _importJsonDialog() async {
     final ctrl = TextEditingController();
-    await showDialog(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Nhập Glossary từ JSON'),
-        content: TextField(
-          controller: ctrl,
-          maxLines: 8,
-          decoration: const InputDecoration(
-            hintText: 'Dán mã JSON chứa danh sách terms & address_rules vào đây...',
+    try {
+      await showDialog(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text('Nhập Glossary từ JSON'),
+          content: TextField(
+            controller: ctrl,
+            maxLines: 8,
+            decoration: const InputDecoration(
+              hintText: 'Dán mã JSON chứa danh sách terms & address_rules vào đây...',
+            ),
           ),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Hủy')),
+            FilledButton(
+              style: FilledButton.styleFrom(backgroundColor: Colors.pinkAccent),
+              onPressed: () async {
+                try {
+                  final decoded = jsonDecode(ctrl.text.trim()) as Map<String, dynamic>;
+                  if (decoded['terms'] is List) {
+                    for (final item in decoded['terms']) {
+                      final term = GlossaryTerm.fromMap(Map<String, dynamic>.from(item));
+                      await _db.saveGlossaryTerm(term);
+                    }
+                  }
+                  if (decoded['address_rules'] is List) {
+                    for (final item in decoded['address_rules']) {
+                      final rule = AddressRule.fromMap(Map<String, dynamic>.from(item));
+                      await _db.saveAddressRule(rule);
+                    }
+                  }
+                  if (ctx.mounted) Navigator.pop(ctx);
+                  _loadData();
+                  if (mounted) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(content: Text('Đã nạp thành công dữ liệu Glossary! 🌸')),
+                    );
+                  }
+                } catch (e) {
+                  if (mounted) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(content: Text('Lỗi định dạng JSON: $e')),
+                    );
+                  }
+                }
+              },
+              child: const Text('Nhập'),
+            ),
+          ],
         ),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Hủy')),
-          FilledButton(
-            style: FilledButton.styleFrom(backgroundColor: Colors.pinkAccent),
-            onPressed: () async {
-              try {
-                final decoded = jsonDecode(ctrl.text.trim()) as Map<String, dynamic>;
-                if (decoded['terms'] is List) {
-                  for (final item in decoded['terms']) {
-                    final term = GlossaryTerm.fromMap(Map<String, dynamic>.from(item));
-                    await _db.saveGlossaryTerm(term);
-                  }
-                }
-                if (decoded['address_rules'] is List) {
-                  for (final item in decoded['address_rules']) {
-                    final rule = AddressRule.fromMap(Map<String, dynamic>.from(item));
-                    await _db.saveAddressRule(rule);
-                  }
-                }
-                if (ctx.mounted) Navigator.pop(ctx);
-                _loadData();
-                if (mounted) {
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(content: Text('Đã nạp thành công dữ liệu Glossary! 🌸')),
-                  );
-                }
-              } catch (e) {
-                if (mounted) {
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(content: Text('Lỗi định dạng JSON: $e')),
-                  );
-                }
-              }
-            },
-            child: const Text('Nhập'),
-          ),
-        ],
-      ),
-    );
+      );
+    } finally {
+      ctrl.dispose();
+    }
   }
 
   @override

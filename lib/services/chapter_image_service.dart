@@ -8,6 +8,7 @@ import 'google_drive_service.dart';
 class ChapterImageService {
   static const maxBytes = 16 * 1024 * 1024;
   static final _limiter = RequestConcurrencyLimiter(maxConcurrency: 2);
+  static final http.Client _client = http.Client();
 
   static Future<Uint8List> load(
     String source, {
@@ -37,7 +38,7 @@ class ChapterImageService {
         final request = http.Request('GET', uri);
         request.headers['Referer'] = referer;
         request.headers['User-Agent'] = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
-        final response = await http.Client().send(request);
+        final response = await _client.send(request);
         if (response.statusCode >= 200 && response.statusCode < 300) {
           bytes = await response.stream.toBytes();
         }

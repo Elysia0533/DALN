@@ -54,7 +54,8 @@ class ChapterNav {
   const ChapterNav({required this.url, required this.name});
 }
 
-class _OnlineChapterReaderScreenState extends State<OnlineChapterReaderScreen> {
+class _OnlineChapterReaderScreenState extends State<OnlineChapterReaderScreen>
+    with WidgetsBindingObserver {
   late String _currentUrl;
   late String _currentTitle;
   late int _currentIndex;
@@ -118,6 +119,7 @@ class _OnlineChapterReaderScreenState extends State<OnlineChapterReaderScreen> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _currentUrl = widget.chapterUrl;
     _currentTitle = widget.chapterTitle;
     _currentIndex = widget.currentIndex;
@@ -126,7 +128,17 @@ class _OnlineChapterReaderScreenState extends State<OnlineChapterReaderScreen> {
   }
 
   @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.paused ||
+        state == AppLifecycleState.inactive ||
+        state == AppLifecycleState.detached) {
+      _saveReadingProgress();
+    }
+  }
+
+  @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _scrollController.removeListener(_onScroll);
     _scrollController.dispose();
     _drawerScrollController.dispose();
@@ -820,7 +832,7 @@ class _OnlineChapterReaderScreenState extends State<OnlineChapterReaderScreen> {
                   : GestureDetector(
                       behavior: HitTestBehavior.translucent,
                       onTap: _toggleToolbars,
-                      child: SingleChildScrollView(
+                      child: ListView.builder(
                         controller: _scrollController,
                         physics: const AlwaysScrollableScrollPhysics(),
                         padding: EdgeInsets.fromLTRB(
@@ -829,30 +841,52 @@ class _OnlineChapterReaderScreenState extends State<OnlineChapterReaderScreen> {
                           20,
                           _bottomBarHeight + 24,
                         ),
-                        child: Center(
-                          child: ConstrainedBox(
-                            constraints: const BoxConstraints(maxWidth: 780),
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                const SizedBox(height: 16),
-                                GestureDetector(
-                                  behavior: HitTestBehavior.translucent,
-                                  onTap: _toggleToolbars,
-                                  child: Text(
-                                    _currentTitle,
-                                    style: settings.bodyTextStyle.copyWith(
-                                      fontSize: settings.fontSize + 6,
-                                      fontWeight: FontWeight.bold,
+                        itemCount: _blocks.length + 2,
+                        itemBuilder: (context, index) {
+                          if (index == 0) {
+                            return Center(
+                              child: ConstrainedBox(
+                                constraints:
+                                    const BoxConstraints(maxWidth: 780),
+                                child: Padding(
+                                  padding: const EdgeInsets.only(
+                                    top: 16,
+                                    bottom: 20,
+                                  ),
+                                  child: GestureDetector(
+                                    behavior: HitTestBehavior.translucent,
+                                    onTap: _toggleToolbars,
+                                    child: Text(
+                                      _currentTitle,
+                                      style: settings.bodyTextStyle.copyWith(
+                                        fontSize: settings.fontSize + 6,
+                                        fontWeight: FontWeight.bold,
+                                      ),
                                     ),
                                   ),
                                 ),
-                                const SizedBox(height: 20),
-                                for (var i = 0; i < _blocks.length; i++)
-                                  _buildBlock(i, settings),
-                              const SizedBox(height: 60),
-                              // End of Chapter indicator
-                              Center(
+                              ),
+                            );
+                          }
+                          if (index <= _blocks.length) {
+                            return Center(
+                              child: ConstrainedBox(
+                                constraints:
+                                    const BoxConstraints(maxWidth: 780),
+                                child: _buildBlock(index - 1, settings),
+                              ),
+                            );
+                          }
+                          // End of Chapter indicator
+                          return Center(
+                            child: ConstrainedBox(
+                              constraints:
+                                  const BoxConstraints(maxWidth: 780),
+                              child: Padding(
+                                padding: const EdgeInsets.only(
+                                  top: 60,
+                                  bottom: 40,
+                                ),
                                 child: Column(
                                   children: [
                                     Icon(
@@ -884,14 +918,12 @@ class _OnlineChapterReaderScreenState extends State<OnlineChapterReaderScreen> {
                                   ],
                                 ),
                               ),
-                              const SizedBox(height: 40),
-                            ],
-                          ),
-                        ),
+                            ),
+                          );
+                        },
                       ),
                     ),
                   ),
-            ),
 
             // Top Overlay Bar (Animates in/out)
             Positioned(

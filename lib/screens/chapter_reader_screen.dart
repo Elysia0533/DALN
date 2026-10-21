@@ -7,6 +7,7 @@ import 'package:flutter/services.dart';
 import 'dart:io';
 import '../models/story.dart';
 import '../models/reading_marker.dart';
+import '../models/tts_paragraph.dart';
 import '../services/api_service.dart';
 import '../services/google_drive_service.dart';
 import '../services/tts_service.dart';
@@ -35,8 +36,10 @@ class ChapterReaderScreen extends StatefulWidget {
   State<ChapterReaderScreen> createState() => _ChapterReaderScreenState();
 }
 
-class _ChapterReaderScreenState extends State<ChapterReaderScreen> {
+class _ChapterReaderScreenState extends State<ChapterReaderScreen>
+    with WidgetsBindingObserver {
   List<_Chapter> _chapters = [];
+  List<TtsParagraph> _parsedParagraphs = [];
   int _currentIndex = 0;
   bool _isLoading = true;
   String? _error;
@@ -57,11 +60,34 @@ class _ChapterReaderScreenState extends State<ChapterReaderScreen> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _currentIndex =
         widget.initialChapterIndex ?? widget.story.savedChapterIndex;
     _loadEpub();
     _scrollController.addListener(_onScroll);
     _setupTtsListener();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.paused ||
+        state == AppLifecycleState.inactive ||
+        state == AppLifecycleState.detached) {
+      _recordCurrentHistory();
+    }
+  }
+
+  void _updateParsedParagraphs() {
+    if (_chapters.isEmpty ||
+        _currentIndex < 0 ||
+        _currentIndex >= _chapters.length) {
+      _parsedParagraphs = [];
+      return;
+    }
+    _parsedParagraphs = TtsService.parseParagraphs(
+      _chapters[_currentIndex].plain,
+      chapterIndex: _currentIndex,
+    );
   }
 
   void _setupTtsListener() {
@@ -159,8 +185,9 @@ class _ChapterReaderScreenState extends State<ChapterReaderScreen> {
         );
       }
       if (!mounted) return;
+      _chapters = flat;
+      _updateParsedParagraphs();
       setState(() {
-        _chapters = flat;
         _isLoading = false;
       });
       await _recordCurrentHistory();
@@ -336,7 +363,9 @@ class _ChapterReaderScreenState extends State<ChapterReaderScreen> {
       await _stopTts();
     }
     if (!mounted) return;
-    setState(() => _currentIndex = index);
+    _currentIndex = index;
+    _updateParsedParagraphs();
+    setState(() {});
 
     ApiService.saveChapterProgress(
       widget.story.id,
@@ -576,7 +605,9 @@ class _ChapterReaderScreenState extends State<ChapterReaderScreen> {
   Future<void> _jumpToBookmark(ReadingMarker marker) async {
     if (marker.chapterIndex != _currentIndex) {
       if (marker.chapterIndex >= 0 && marker.chapterIndex < _chapters.length) {
-        setState(() => _currentIndex = marker.chapterIndex);
+        _currentIndex = marker.chapterIndex;
+        _updateParsedParagraphs();
+        setState(() {});
         ApiService.saveChapterProgress(
           widget.story.id,
           marker.chapterIndex,
@@ -690,6 +721,7 @@ class _ChapterReaderScreenState extends State<ChapterReaderScreen> {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     TtsService.instance.removeListener(_onTtsStateChange);
     _scrollController.dispose();
     super.dispose();
@@ -771,56 +803,44 @@ class _ChapterReaderScreenState extends State<ChapterReaderScreen> {
                       ),
                     ),
                   ),
-                  SliverToBoxAdapter(
-                    child: Center(
-                      child: ConstrainedBox(
-                        constraints: const BoxConstraints(maxWidth: 760),
-                        child: Padding(
-                          padding: const EdgeInsets.symmetric(horizontal: 20),
-                          child: Builder(
-                            builder: (context) {
-                              final parsedParagraphs =
-                                  TtsService.parseParagraphs(
-                                    ch.plain,
-                                    chapterIndex: _currentIndex,
-                                  );
-                              return Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: List.generate(
-                                  parsedParagraphs.length,
-                                  (i) {
-                                    final p = parsedParagraphs[i];
-                                    return _ParagraphWidget(
-                                      key: ValueKey('ch_${_currentIndex}_p_$i'),
-                                      paragraphIndex: i,
-                                      chapterIndex: _currentIndex,
-                                      text: p.text,
-                                      style: settings.bodyTextStyle,
-                                      onNote: _saveSelectionNote,
-                                      onSpeak: (selectedText) =>
-                                          _speakSelectionFromParagraph(
-                                            selectedText,
-                                            i,
-                                          ),
-                                      onSelectionSpeak:
-                                          (selectedText, start, end) =>
-                                              _speakSelectionFromParagraph(
-                                                selectedText,
-                                                i,
-                                                start: start,
-                                                end: end,
-                                              ),
-                                      onSearch: _showSelectionSearch,
-                                      onSettings: (_) => _showSettings(),
-                                      onShare: _shareSelection,
-                                      onTranslate: _translateSelection,
-                                    );
-                                  },
-                                ),
-                              );
-                            },
-                          ),
-                        ),
+                  SliverPadding(
+                    padding: const EdgeInsets.symmetric(horizontal: 20),
+                    sliver: SliverList(
+                      delegate: SliverChildBuilderDelegate(
+                        (context, i) {
+                          final p = _parsedParagraphs[i];
+                          return Center(
+                            child: ConstrainedBox(
+                              constraints: const BoxConstraints(maxWidth: 760),
+                              child: _ParagraphWidget(
+                                key: ValueKey('ch_${_currentIndex}_p_$i'),
+                                paragraphIndex: i,
+                                chapterIndex: _currentIndex,
+                                text: p.text,
+                                style: settings.bodyTextStyle,
+                                onNote: _saveSelectionNote,
+                                onSpeak: (selectedText) =>
+                                    _speakSelectionFromParagraph(
+                                      selectedText,
+                                      i,
+                                    ),
+                                onSelectionSpeak:
+                                    (selectedText, start, end) =>
+                                        _speakSelectionFromParagraph(
+                                          selectedText,
+                                          i,
+                                          start: start,
+                                          end: end,
+                                        ),
+                                onSearch: _showSelectionSearch,
+                                onSettings: (_) => _showSettings(),
+                                onShare: _shareSelection,
+                                onTranslate: _translateSelection,
+                              ),
+                            ),
+                          );
+                        },
+                        childCount: _parsedParagraphs.length,
                       ),
                     ),
                   ),

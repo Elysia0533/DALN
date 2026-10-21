@@ -657,150 +657,156 @@ class _ExploreScreenState extends State<ExploreScreen> {
         before.genres.join('|') != after.genres.join('|');
   }
 
-  void _importFromDriveDialog() {
-    TextEditingController urlController = TextEditingController();
-    ApiService.getSavedDriveStoryFolderInputs().then((inputs) {
+  Future<void> _importFromDriveDialog() async {
+    final urlController = TextEditingController();
+    try {
+      final inputs = await ApiService.getSavedDriveStoryFolderInputs();
       if (urlController.text.isEmpty && inputs.isNotEmpty) {
         urlController.text = inputs.join('\n');
       }
-    });
-    showDialog(
-      context: context,
-      builder: (dialogContext) {
-        return AlertDialog(
-          title: const Text('Quét thư mục Google Drive'),
-          content: TextField(
-            controller: urlController,
-            minLines: 3,
-            maxLines: 6,
-            decoration: const InputDecoration(
-              hintText:
-                  'Dán link Drive. Link admin nhập sẽ được lưu để lần sau tự cập nhật.',
+      if (!mounted) return;
+      await showDialog(
+        context: context,
+        builder: (dialogContext) {
+          return AlertDialog(
+            title: const Text('Quét thư mục Google Drive'),
+            content: TextField(
+              controller: urlController,
+              minLines: 3,
+              maxLines: 6,
+              decoration: const InputDecoration(
+                hintText:
+                    'Dán link Drive. Link admin nhập sẽ được lưu để lần sau tự cập nhật.',
+              ),
             ),
-          ),
-          actions: [
-            TextButton(
-              child: const Text('Hủy'),
-              onPressed: () => Navigator.pop(dialogContext),
-            ),
-            TextButton(
-              child: const Text('Tạo catalog.json'),
-              onPressed: () async {
-                Navigator.pop(dialogContext);
-                setState(() => _isLoading = true);
-                try {
-                  final folderUrls = urlController.text
-                      .trim()
-                      .split('\n')
-                      .map((e) => e.trim())
-                      .where((e) => e.isNotEmpty)
-                      .toList();
-                  if (folderUrls.isEmpty) throw Exception('Vui lòng nhập link');
-                  if (folderUrls.length > 1) {
-                    throw Exception(
-                        'Vui lòng xóa các link cũ, chỉ để lại 1 link duy nhất (link thư mục của bạn) để tạo catalog.');
-                  }
-                  
-                  await ApiService.saveDriveStoryFolderInputs(urlController.text, overwrite: true);
-                  final folderUrl = folderUrls.first;
-                  
-                  final driveStories = await ApiService.fetchDriveStoriesFromFolder(folderUrl);
-                  await GoogleDriveService.uploadCatalogToFolder(folderUrl, driveStories);
-                  
-                  if (mounted) {
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(
-                        content: Row(
-                          children: [
-                            Icon(Icons.check_circle, color: Colors.white),
-                            SizedBox(width: 12),
-                            Expanded(child: Text('Đã tạo và upload catalog.json thành công!', style: TextStyle(color: Colors.white))),
-                          ],
+            actions: [
+              TextButton(
+                child: const Text('Hủy'),
+                onPressed: () => Navigator.pop(dialogContext),
+              ),
+              TextButton(
+                child: const Text('Tạo catalog.json'),
+                onPressed: () async {
+                  final inputText = urlController.text;
+                  Navigator.pop(dialogContext);
+                  setState(() => _isLoading = true);
+                  try {
+                    final folderUrls = inputText
+                        .trim()
+                        .split('\n')
+                        .map((e) => e.trim())
+                        .where((e) => e.isNotEmpty)
+                        .toList();
+                    if (folderUrls.isEmpty) throw Exception('Vui lòng nhập link');
+                    if (folderUrls.length > 1) {
+                      throw Exception(
+                          'Vui lòng xóa các link cũ, chỉ để lại 1 link duy nhất (link thư mục của bạn) để tạo catalog.');
+                    }
+                    
+                    await ApiService.saveDriveStoryFolderInputs(inputText, overwrite: true);
+                    final folderUrl = folderUrls.first;
+                    
+                    final driveStories = await ApiService.fetchDriveStoriesFromFolder(folderUrl);
+                    await GoogleDriveService.uploadCatalogToFolder(folderUrl, driveStories);
+                    
+                    if (mounted) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(
+                          content: Row(
+                            children: [
+                              Icon(Icons.check_circle, color: Colors.white),
+                              SizedBox(width: 12),
+                              Expanded(child: Text('Đã tạo và upload catalog.json thành công!', style: TextStyle(color: Colors.white))),
+                            ],
+                          ),
+                          backgroundColor: Colors.green,
+                          behavior: SnackBarBehavior.floating,
                         ),
-                        backgroundColor: Colors.green,
-                        behavior: SnackBarBehavior.floating,
-                      ),
-                    );
-                  }
-                } catch (e) {
-                  if (mounted) {
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(
-                        content: Row(
-                          children: [
-                            const Icon(Icons.error_outline, color: Colors.white),
-                            const SizedBox(width: 12),
-                            Expanded(child: Text('Lỗi: $e', style: const TextStyle(color: Colors.white))),
-                          ],
-                        ),
-                        backgroundColor: Colors.red.shade700,
-                        behavior: SnackBarBehavior.floating,
-                      ),
-                    );
-                  }
-                } finally {
-                  if (mounted) setState(() => _isLoading = false);
-                }
-              },
-            ),
-            TextButton(
-              child: const Text('Quét'),
-              onPressed: () async {
-                Navigator.pop(dialogContext);
-                setState(() => _isLoading = true);
-                try {
-                  await ApiService.saveDriveStoryFolderInputs(urlController.text, overwrite: true);
-                  final driveStories =
-                      await ApiService.fetchDriveStoriesFromFolder(
-                        urlController.text,
                       );
-                  _serverStories = driveStories;
-                  _seenStoryIds
-                    ..clear()
-                    ..addAll(
-                      driveStories.map(
-                        (story) => story.driveFileId.isNotEmpty
-                            ? story.driveFileId
-                            : story.id,
-                      ),
-                    );
-                  _nextPageToken = null;
-                  _hasMore = false;
-                  _loadError = null;
-                  unawaited(
-                    _synchronizeDriveSearch(
-                      force: true,
-                      reloadFolderInputs: true,
-                    ),
-                  );
-                  if (mounted) {
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(
-                        content: Text(
-                          'Đã tải ${driveStories.length} truyện từ Google Drive!',
+                    }
+                  } catch (e) {
+                    if (mounted) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(
+                          content: Row(
+                            children: [
+                              const Icon(Icons.error_outline, color: Colors.white),
+                              const SizedBox(width: 12),
+                              Expanded(child: Text('Lỗi: $e', style: const TextStyle(color: Colors.white))),
+                            ],
+                          ),
+                          backgroundColor: Colors.red.shade700,
+                          behavior: SnackBarBehavior.floating,
                         ),
+                      );
+                    }
+                  } finally {
+                    if (mounted) setState(() => _isLoading = false);
+                  }
+                },
+              ),
+              TextButton(
+                child: const Text('Quét'),
+                onPressed: () async {
+                  final inputText = urlController.text;
+                  Navigator.pop(dialogContext);
+                  setState(() => _isLoading = true);
+                  try {
+                    await ApiService.saveDriveStoryFolderInputs(inputText, overwrite: true);
+                    final driveStories =
+                        await ApiService.fetchDriveStoriesFromFolder(
+                          inputText,
+                        );
+                    _serverStories = driveStories;
+                    _seenStoryIds
+                      ..clear()
+                      ..addAll(
+                        driveStories.map(
+                          (story) => story.driveFileId.isNotEmpty
+                              ? story.driveFileId
+                              : story.id,
+                        ),
+                      );
+                    _nextPageToken = null;
+                    _hasMore = false;
+                    _loadError = null;
+                    unawaited(
+                      _synchronizeDriveSearch(
+                        force: true,
+                        reloadFolderInputs: true,
                       ),
                     );
+                    if (mounted) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(
+                          content: Text(
+                            'Đã tải ${driveStories.length} truyện từ Google Drive!',
+                          ),
+                        ),
+                      );
+                    }
+                  } catch (e) {
+                    _serverStories = [];
+                    _loadError = _formatLoadError(e);
+                    if (mounted) {
+                      ScaffoldMessenger.of(
+                        context,
+                      ).showSnackBar(SnackBar(content: Text('Lỗi: $e')));
+                    }
                   }
-                } catch (e) {
-                  _serverStories = [];
-                  _loadError = _formatLoadError(e);
                   if (mounted) {
-                    ScaffoldMessenger.of(
-                      context,
-                    ).showSnackBar(SnackBar(content: Text('Lỗi: $e')));
+                    setState(() => _isLoading = false);
+                    unawaited(_enrichMissingDriveMetadata());
                   }
-                }
-                if (mounted) {
-                  setState(() => _isLoading = false);
-                  unawaited(_enrichMissingDriveMetadata());
-                }
-              },
-            ),
-          ],
-        );
-      },
-    );
+                },
+              ),
+            ],
+          );
+        },
+      );
+    } finally {
+      urlController.dispose();
+    }
   }
 
   Future<void> _openExtensionManager() async {

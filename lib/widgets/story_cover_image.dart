@@ -48,25 +48,41 @@ class _StoryCoverImageState extends State<StoryCoverImage> {
     }
   }
 
+  int _calculateCacheWidth(BuildContext context) {
+    if (widget.width == null) return 360;
+    try {
+      final dpr = MediaQuery.maybeOf(context)?.devicePixelRatio ?? 2.0;
+      return (widget.width! * dpr).round().clamp(150, 1080);
+    } catch (_) {
+      return 360;
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final trimmedPath = widget.imagePath.trim();
+    final cacheWidth = _calculateCacheWidth(context);
     final Widget image;
 
     if (trimmedPath.startsWith('http')) {
       image = _networkImage(
         GoogleDriveService.coverImageCandidates(trimmedPath),
+        cacheWidth: cacheWidth,
       );
-    } else if (trimmedPath.isNotEmpty && File(trimmedPath).existsSync()) {
+    } else if (trimmedPath.isNotEmpty &&
+        !trimmedPath.startsWith('http') &&
+        (trimmedPath.startsWith('/') ||
+            trimmedPath.contains(RegExp(r'^[a-zA-Z]:[/\\]')))) {
       image = Image.file(
         File(trimmedPath),
         width: widget.width,
         height: widget.height,
+        cacheWidth: cacheWidth,
         fit: widget.fit,
-        errorBuilder: (_, _, _) => _fallback(),
+        errorBuilder: (_, _, _) => _driveCoverOrFallback(cacheWidth: cacheWidth),
       );
     } else {
-      image = _driveCoverOrFallback();
+      image = _driveCoverOrFallback(cacheWidth: cacheWidth);
     }
 
     final content = ColoredBox(
@@ -93,7 +109,7 @@ class _StoryCoverImageState extends State<StoryCoverImage> {
     };
   }
 
-  Widget _networkImage(List<String> candidates) {
+  Widget _networkImage(List<String> candidates, {required int cacheWidth}) {
     if (candidates.isEmpty) return _fallback();
 
     final index = _candidateIndex >= candidates.length ? 0 : _candidateIndex;
@@ -105,6 +121,7 @@ class _StoryCoverImageState extends State<StoryCoverImage> {
       key: ValueKey(imageUrl),
       width: widget.width,
       height: widget.height,
+      cacheWidth: cacheWidth,
       fit: widget.fit,
       gaplessPlayback: true,
       filterQuality: FilterQuality.medium,
@@ -120,12 +137,12 @@ class _StoryCoverImageState extends State<StoryCoverImage> {
           });
           return _loading();
         }
-        return _driveCoverOrFallback();
+        return _driveCoverOrFallback(cacheWidth: cacheWidth);
       },
     );
   }
 
-  Widget _driveCoverOrFallback() {
+  Widget _driveCoverOrFallback({int cacheWidth = 360}) {
     final driveFileId = widget.driveFileId.trim();
     final fileType = widget.fileType.trim().toLowerCase();
     if (driveFileId.isEmpty || fileType != 'epub') return _fallback();
@@ -144,6 +161,7 @@ class _StoryCoverImageState extends State<StoryCoverImage> {
             File(coverPath),
             width: widget.width,
             height: widget.height,
+            cacheWidth: cacheWidth,
             fit: widget.fit,
             errorBuilder: (_, _, _) => _fallback(),
           );

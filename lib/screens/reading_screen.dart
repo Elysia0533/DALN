@@ -4,6 +4,7 @@ import 'package:flutter/services.dart';
 import 'dart:async';
 import '../models/story.dart';
 import '../models/reading_marker.dart';
+import '../models/tts_paragraph.dart';
 import '../services/api_service.dart';
 import '../theme/reading_settings_provider.dart';
 import '../widgets/reader_selectable_text.dart';
@@ -27,11 +28,13 @@ class ReadingScreen extends StatefulWidget {
   State<ReadingScreen> createState() => _ReadingScreenState();
 }
 
-class _ReadingScreenState extends State<ReadingScreen> {
+class _ReadingScreenState extends State<ReadingScreen>
+    with WidgetsBindingObserver {
   bool _showEnglish = false;
   bool _showToolbar = false;
   bool _isBookmarked = false;
 
+  List<TtsParagraph> _parsedParagraphs = [];
   final ScrollController _scrollController = ScrollController();
   double _scrollProgress = 0.0;
   Timer? _historySaveTimer;
@@ -41,6 +44,8 @@ class _ReadingScreenState extends State<ReadingScreen> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    _updateParsedParagraphs();
     _restoreScrollPosition();
     _loadBookmarkState();
     _scrollController.addListener(_onScroll);
@@ -55,6 +60,23 @@ class _ReadingScreenState extends State<ReadingScreen> {
         );
       }
     });
+  }
+
+  void _updateParsedParagraphs() {
+    _parsedParagraphs = TtsService.parseParagraphs(_currentContent);
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.paused ||
+        state == AppLifecycleState.inactive ||
+        state == AppLifecycleState.detached) {
+      if (_scrollController.hasClients) {
+        final current = _scrollController.offset;
+        ApiService.saveScrollOffset(widget.story.id, current);
+        _recordHistory(offset: current);
+      }
+    }
   }
 
   void _setupTtsListener() {
@@ -74,13 +96,12 @@ class _ReadingScreenState extends State<ReadingScreen> {
 
   void _scrollToParagraph(int index) {
     if (!_scrollController.hasClients) return;
-    final paragraphs = TtsService.parseParagraphs(_currentContent);
-    if (paragraphs.isEmpty) return;
+    if (_parsedParagraphs.isEmpty) return;
 
     final maxScroll = _scrollController.position.maxScrollExtent;
     if (maxScroll <= 0) return;
 
-    final ratio = (index / (paragraphs.length)).clamp(0.0, 1.0);
+    final ratio = (index / (_parsedParagraphs.length)).clamp(0.0, 1.0);
     final targetOffset = (ratio * maxScroll).clamp(0.0, maxScroll);
 
     _scrollController.animateTo(
@@ -357,7 +378,10 @@ class _ReadingScreenState extends State<ReadingScreen> {
   void _handleReaderMenuAction(String action) {
     switch (action) {
       case 'language':
-        setState(() => _showEnglish = !_showEnglish);
+        setState(() {
+          _showEnglish = !_showEnglish;
+          _updateParsedParagraphs();
+        });
         break;
       case 'bookmarks':
         _showBookmarks();
@@ -373,6 +397,7 @@ class _ReadingScreenState extends State<ReadingScreen> {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _historySaveTimer?.cancel();
     if (_scrollController.hasClients) {
       _recordHistory(offset: _scrollController.offset);
@@ -392,82 +417,91 @@ class _ReadingScreenState extends State<ReadingScreen> {
         onTap: () => setState(() => _showToolbar = !_showToolbar),
         child: Stack(
           children: [
-            SingleChildScrollView(
+            CustomScrollView(
               controller: _scrollController,
-              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 56),
-              child: Center(
-                child: ConstrainedBox(
-                  constraints: const BoxConstraints(maxWidth: 760),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      const SizedBox(height: 50),
-                      ReaderSelectableText(
-                        widget.story.title,
-                        style: settings.bodyTextStyle.copyWith(
-                          fontSize: settings.fontSize + 4,
-                          fontWeight: FontWeight.bold,
+              physics: const AlwaysScrollableScrollPhysics(),
+              slivers: [
+                SliverToBoxAdapter(
+                  child: Center(
+                    child: ConstrainedBox(
+                      constraints: const BoxConstraints(maxWidth: 760),
+                      child: Padding(
+                        padding: const EdgeInsets.fromLTRB(20, 106, 20, 24),
+                        child: ReaderSelectableText(
+                          widget.story.title,
+                          style: settings.bodyTextStyle.copyWith(
+                            fontSize: settings.fontSize + 4,
+                            fontWeight: FontWeight.bold,
+                          ),
+                          onNote: _saveSelectionNote,
+                          onSpeak: _speakSelection,
+                          onSearch: _showSelectionSearch,
+                          onSettings: (_) => _showSettings(),
+                          onShare: _shareSelection,
+                          onTap: () =>
+                              setState(() => _showToolbar = !_showToolbar),
                         ),
-                        onNote: _saveSelectionNote,
-                        onSpeak: _speakSelection,
-                        onSearch: _showSelectionSearch,
-                        onSettings: (_) => _showSettings(),
-                        onShare: _shareSelection,
-                        onTap: () => setState(() => _showToolbar = !_showToolbar),
                       ),
-                      const SizedBox(height: 24),
-                      Builder(
-                        builder: (context) {
-                          final parsedParagraphs = TtsService.parseParagraphs(
-                            _currentContent,
-                          );
-                          return Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: List.generate(parsedParagraphs.length, (
-                              i,
-                            ) {
-                              final p = parsedParagraphs[i];
-                              return _ParagraphWidget(
-                                key: ValueKey('rs_p_$i'),
-                                paragraphIndex: i,
-                                chapterIndex: 0,
-                                text: p.text,
-                                style: settings.bodyTextStyle,
-                                onNote: _saveSelectionNote,
-                                onSpeak: (selectedText) =>
-                                    _speakSelectionFromParagraph(
-                                      selectedText,
-                                      i,
-                                    ),
-                                onSelectionSpeak: (selectedText, start, end) =>
-                                    _speakSelectionFromParagraph(
-                                      selectedText,
-                                      i,
-                                      start: start,
-                                      end: end,
-                                    ),
-                                onSearch: _showSelectionSearch,
-                                onSettings: (_) => _showSettings(),
-                                onShare: _shareSelection,
-                                onTap: () =>
-                                    setState(() => _showToolbar = !_showToolbar),
-                              );
-                            }),
-                          );
-                        },
-                      ),
-
-                      const SizedBox(height: 80),
-                      _TextEndCard(
-                        textColor: settings.textColor,
-                        accentColor: Theme.of(context).primaryColor,
-                        progress: _scrollProgress,
-                      ),
-                      const SizedBox(height: 40),
-                    ],
+                    ),
                   ),
                 ),
-              ),
+                SliverPadding(
+                  padding: const EdgeInsets.symmetric(horizontal: 20),
+                  sliver: SliverList(
+                    delegate: SliverChildBuilderDelegate(
+                      (context, i) {
+                        final p = _parsedParagraphs[i];
+                        return Center(
+                          child: ConstrainedBox(
+                            constraints: const BoxConstraints(maxWidth: 760),
+                            child: _ParagraphWidget(
+                              key: ValueKey('rs_p_$i'),
+                              paragraphIndex: i,
+                              chapterIndex: 0,
+                              text: p.text,
+                              style: settings.bodyTextStyle,
+                              onNote: _saveSelectionNote,
+                              onSpeak: (selectedText) =>
+                                  _speakSelectionFromParagraph(
+                                    selectedText,
+                                    i,
+                                  ),
+                              onSelectionSpeak: (selectedText, start, end) =>
+                                  _speakSelectionFromParagraph(
+                                    selectedText,
+                                    i,
+                                    start: start,
+                                    end: end,
+                                  ),
+                              onSearch: _showSelectionSearch,
+                              onSettings: (_) => _showSettings(),
+                              onShare: _shareSelection,
+                              onTap: () =>
+                                  setState(() => _showToolbar = !_showToolbar),
+                            ),
+                          ),
+                        );
+                      },
+                      childCount: _parsedParagraphs.length,
+                    ),
+                  ),
+                ),
+                SliverToBoxAdapter(
+                  child: Center(
+                    child: ConstrainedBox(
+                      constraints: const BoxConstraints(maxWidth: 760),
+                      child: Padding(
+                        padding: const EdgeInsets.fromLTRB(20, 80, 20, 40),
+                        child: _TextEndCard(
+                          textColor: settings.textColor,
+                          accentColor: Theme.of(context).primaryColor,
+                          progress: _scrollProgress,
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ],
             ),
 
             AnimatedSlide(
