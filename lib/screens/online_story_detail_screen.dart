@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:uuid/uuid.dart';
 import 'package:share_plus/share_plus.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../models/plugin_info.dart';
 import '../models/story.dart';
 import '../services/plugin/vbook_engine_channel.dart';
@@ -9,7 +10,6 @@ import '../models/source_models.dart';
 import '../services/api_service.dart';
 import '../services/offline_download_service.dart';
 import '../widgets/story_cover_image.dart';
-import '../widgets/marquee_text.dart';
 import 'online_chapter_reader_screen.dart';
 import 'web_browser_screen.dart';
 
@@ -18,6 +18,7 @@ class OnlineStoryDetailScreen extends StatefulWidget {
   final String storyUrl;
   final String initialTitle;
   final String initialCover;
+  final String? storyId;
 
   const OnlineStoryDetailScreen({
     super.key,
@@ -25,6 +26,7 @@ class OnlineStoryDetailScreen extends StatefulWidget {
     required this.storyUrl,
     required this.initialTitle,
     required this.initialCover,
+    this.storyId,
   });
 
   @override
@@ -33,6 +35,7 @@ class OnlineStoryDetailScreen extends StatefulWidget {
 }
 
 class _OnlineStoryDetailScreenState extends State<OnlineStoryDetailScreen> {
+  final ScrollController _scrollController = ScrollController();
   bool _isLoading = true;
   String? _error;
   SManga? _detail;
@@ -40,6 +43,10 @@ class _OnlineStoryDetailScreenState extends State<OnlineStoryDetailScreen> {
   bool _isLoadingChapters = true;
   bool _isAddingToLibrary = false;
   bool _addedToLibrary = false;
+  String? _savedStoryId;
+  int _savedChapterIndex = 0;
+  bool _isDescriptionExpanded = false;
+
   String get _storyTitle => _detail?.title.trim().isNotEmpty == true
       ? _detail!.title
       : widget.initialTitle;
@@ -50,6 +57,12 @@ class _OnlineStoryDetailScreenState extends State<OnlineStoryDetailScreen> {
     _loadData();
   }
 
+  @override
+  void dispose() {
+    _scrollController.dispose();
+    super.dispose();
+  }
+
   Future<void> _loadData() async {
     setState(() {
       _isLoading = true;
@@ -57,7 +70,7 @@ class _OnlineStoryDetailScreenState extends State<OnlineStoryDetailScreen> {
       _error = null;
     });
 
-    _checkIfAdded();
+    _checkIfAddedAndProgress();
 
     try {
       final dirPath = await PluginLoader.getPluginDir(widget.plugin.id);
@@ -95,13 +108,54 @@ class _OnlineStoryDetailScreenState extends State<OnlineStoryDetailScreen> {
     }
   }
 
-  Future<void> _checkIfAdded() async {
+  Future<void> _checkIfAddedAndProgress() async {
     final stories = await ApiService.fetchPersonalStories();
-    final exists = stories.any(
-      (s) => s.pluginId == widget.plugin.id && s.storyUrl == widget.storyUrl,
+    final matchingStory = stories.cast<Story?>().firstWhere(
+      (s) =>
+          (widget.storyId != null && s?.id == widget.storyId) ||
+          (s?.pluginId == widget.plugin.id && s?.storyUrl == widget.storyUrl),
+      orElse: () => null,
+    );
+    final prefs = await SharedPreferences.getInstance();
+    final localProg =
+        prefs.getInt('ext_prog_${widget.plugin.id}_${widget.storyUrl}');
+
+    if (mounted) {
+      setState(() {
+        _addedToLibrary = matchingStory != null;
+        _savedStoryId = matchingStory?.id ?? widget.storyId;
+        _savedChapterIndex =
+            matchingStory?.savedChapterIndex ?? localProg ?? 0;
+      });
+    }
+  }
+
+  Future<void> _openReader(int chapterIndex) async {
+    if (_chapters.isEmpty ||
+        chapterIndex < 0 ||
+        chapterIndex >= _chapters.length) {
+      return;
+    }
+    final ch = _chapters[chapterIndex];
+    await Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => OnlineChapterReaderScreen(
+          plugin: widget.plugin,
+          storyUrl: widget.storyUrl,
+          storyId: _savedStoryId ?? widget.storyId,
+          chapterUrl: ch.url,
+          chapterTitle: ch.name.isNotEmpty
+              ? ch.name
+              : 'Chương ${chapterIndex + 1}',
+          storyTitle: _storyTitle,
+          allChapters: _buildChapterNavList(),
+          currentIndex: chapterIndex,
+        ),
+      ),
     );
     if (mounted) {
-      setState(() => _addedToLibrary = exists);
+      _checkIfAddedAndProgress();
     }
   }
 
@@ -128,8 +182,9 @@ class _OnlineStoryDetailScreenState extends State<OnlineStoryDetailScreen> {
           .where((g) => g.isNotEmpty)
           .toList();
 
+      final newId = widget.storyId ?? _savedStoryId ?? const Uuid().v4();
       final story = Story(
-        id: const Uuid().v4(),
+        id: newId,
         title: title,
         description: desc,
         author: author,
@@ -140,6 +195,7 @@ class _OnlineStoryDetailScreenState extends State<OnlineStoryDetailScreen> {
         isLocal: false,
         pluginId: widget.plugin.id,
         storyUrl: widget.storyUrl,
+        savedChapterIndex: _savedChapterIndex,
       );
 
       await ApiService.importLocalStory(story);
@@ -148,6 +204,7 @@ class _OnlineStoryDetailScreenState extends State<OnlineStoryDetailScreen> {
         setState(() {
           _isAddingToLibrary = false;
           _addedToLibrary = true;
+          _savedStoryId = newId;
         });
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
@@ -489,7 +546,9 @@ class _OnlineStoryDetailScreenState extends State<OnlineStoryDetailScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final colorScheme = Theme.of(context).colorScheme;
+    final theme = Theme.of(context);
+    final colorScheme = theme.colorScheme;
+    final isDark = theme.brightness == Brightness.dark;
     final title = (_detail?.title.trim().isNotEmpty == true)
         ? _detail!.title
         : widget.initialTitle;
@@ -506,31 +565,209 @@ class _OnlineStoryDetailScreenState extends State<OnlineStoryDetailScreen> {
     final statusText = status == SManga.ongoing
         ? 'Đang tiến hành'
         : status == SManga.completed
-        ? 'Hoàn thành'
-        : 'Không rõ';
+        ? 'Đã hoàn thành'
+        : 'Chưa rõ';
+    final genresText = (_detail?.genre != null && _detail!.genre.trim().isNotEmpty)
+        ? _detail!.genre
+        : 'One shot, Slice of Life, Web Novel';
 
     return Scaffold(
       appBar: AppBar(
-        title: MarqueeText(title, style: const TextStyle(fontSize: 16)),
+        elevation: 0,
+        backgroundColor: Colors.transparent,
+        leading: IconButton(
+          icon: const Icon(Icons.arrow_back_ios_new, size: 20),
+          onPressed: () => Navigator.pop(context),
+        ),
         actions: [
-          if (!_isLoadingChapters && _chapters.isNotEmpty)
-            IconButton(
-              icon: const Icon(Icons.download_for_offline_outlined),
-              tooltip: 'Tải truyện Offline',
-              onPressed: _startDownloadFlow,
-            ),
-          if (!_isLoadingChapters && _chapters.isNotEmpty)
-            IconButton(
-              icon: const Icon(Icons.import_export_rounded),
-              tooltip: 'Xuất file EPUB',
-              onPressed: _exportEpubFlow,
-            ),
           IconButton(
-            icon: const Icon(Icons.open_in_browser_outlined),
-            tooltip: 'Mở trình duyệt / Đăng nhập',
+            icon: const Icon(Icons.explore_outlined),
+            tooltip: 'Mở nguồn web',
             onPressed: _openBrowser,
           ),
+          IconButton(
+            icon: const Icon(Icons.share_outlined),
+            tooltip: 'Chia sẻ',
+            onPressed: () {
+              Share.share('$_storyTitle - ${widget.storyUrl}');
+            },
+          ),
         ],
+      ),
+      bottomNavigationBar: Container(
+        decoration: BoxDecoration(
+          color: theme.colorScheme.surface,
+          border: Border(
+            top: BorderSide(
+              color: isDark ? Colors.white12 : Colors.black12,
+            ),
+          ),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withAlpha(20),
+              blurRadius: 10,
+              offset: const Offset(0, -2),
+            ),
+          ],
+        ),
+        child: SafeArea(
+          top: false,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              // Nút đọc tiếp / đọc từ đầu
+              if (!_isLoadingChapters && _chapters.isNotEmpty)
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: FilledButton.icon(
+                          onPressed: () => _openReader(
+                            _savedChapterIndex.clamp(0, _chapters.length - 1),
+                          ),
+                          icon: const Icon(Icons.menu_book_rounded),
+                          label: Text(
+                            _savedChapterIndex > 0
+                                ? 'Đọc tiếp (Chương ${_savedChapterIndex + 1})'
+                                : 'Đọc từ đầu',
+                            style: const TextStyle(
+                              fontWeight: FontWeight.bold,
+                              fontSize: 15,
+                            ),
+                          ),
+                          style: FilledButton.styleFrom(
+                            padding: const EdgeInsets.symmetric(vertical: 12),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(10),
+                            ),
+                          ),
+                        ),
+                      ),
+                      if (_savedChapterIndex > 0) ...[
+                        const SizedBox(width: 8),
+                        OutlinedButton(
+                          onPressed: () => _openReader(0),
+                          style: OutlinedButton.styleFrom(
+                            padding: const EdgeInsets.symmetric(
+                              vertical: 12,
+                              horizontal: 14,
+                            ),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(10),
+                            ),
+                          ),
+                          child: const Text('Từ đầu'),
+                        ),
+                      ],
+                    ],
+                  ),
+                ),
+
+              // Bottom 3-tab dock matching Screenshot 1
+              Row(
+                children: [
+                  Expanded(
+                    child: InkWell(
+                      onTap: _startDownloadFlow,
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(vertical: 8),
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: const [
+                            Icon(Icons.arrow_downward_rounded, size: 22),
+                            SizedBox(height: 2),
+                            Text(
+                              'Tải xuống',
+                              style: TextStyle(fontSize: 12),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                  Expanded(
+                    child: InkWell(
+                      onTap: () {
+                        if (_scrollController.hasClients) {
+                          _scrollController.animateTo(
+                            460.0,
+                            duration: const Duration(milliseconds: 350),
+                            curve: Curves.easeInOut,
+                          );
+                        }
+                      },
+                      child: Container(
+                        margin: const EdgeInsets.symmetric(
+                          horizontal: 4,
+                          vertical: 4,
+                        ),
+                        padding: const EdgeInsets.symmetric(vertical: 6),
+                        decoration: BoxDecoration(
+                          color: colorScheme.primary.withAlpha(35),
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(
+                              Icons.menu_book_outlined,
+                              size: 22,
+                              color: colorScheme.primary,
+                            ),
+                            const SizedBox(height: 2),
+                            Text(
+                              'Mục lục',
+                              style: TextStyle(
+                                fontSize: 12,
+                                color: colorScheme.primary,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                  Expanded(
+                    child: InkWell(
+                      onTap: _addedToLibrary ? null : _addToLibrary,
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(vertical: 8),
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(
+                              _addedToLibrary
+                                  ? Icons.bookmark_added_rounded
+                                  : Icons.bookmark_add_outlined,
+                              size: 22,
+                              color: _addedToLibrary
+                                  ? Colors.green
+                                  : null,
+                            ),
+                            const SizedBox(height: 2),
+                            Text(
+                              _addedToLibrary
+                                  ? 'Đã vào kệ'
+                                  : 'Thêm vào kệ',
+                              style: TextStyle(
+                                fontSize: 12,
+                                color: _addedToLibrary
+                                    ? Colors.green
+                                    : null,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
       ),
       body: _error != null
           ? Center(
@@ -560,12 +797,6 @@ class _OnlineStoryDetailScreenState extends State<OnlineStoryDetailScreen> {
                       maxLines: 3,
                       overflow: TextOverflow.ellipsis,
                     ),
-                    const SizedBox(height: 8),
-                    const Text(
-                      'Nguồn truyện có thể bị chặn địa lý, yêu cầu Cloudflare hoặc đăng nhập web.',
-                      style: TextStyle(fontSize: 13, color: Colors.grey),
-                      textAlign: TextAlign.center,
-                    ),
                     const SizedBox(height: 24),
                     FilledButton.icon(
                       onPressed: _openBrowser,
@@ -582,19 +813,27 @@ class _OnlineStoryDetailScreenState extends State<OnlineStoryDetailScreen> {
                 ),
               ),
             )
-          : CustomScrollView(
-              slivers: [
+          : (_isLoading && _detail == null)
+              ? const Center(child: CircularProgressIndicator())
+              : CustomScrollView(
+                  controller: _scrollController,
+                  slivers: [
+                    if (_isLoading)
+                      const SliverToBoxAdapter(
+                        child: LinearProgressIndicator(minHeight: 2),
+                      ),
+                    // 1. Header (Cover + Title + Author + Status) - Screenshot 1
                 SliverToBoxAdapter(
                   child: Padding(
-                    padding: const EdgeInsets.all(16.0),
+                    padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
                     child: Row(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         StoryCoverImage(
                           imagePath: cover,
-                          width: 120,
-                          height: 180,
-                          borderRadius: BorderRadius.circular(8),
+                          width: 105,
+                          height: 155,
+                          borderRadius: BorderRadius.circular(4),
                         ),
                         const SizedBox(width: 16),
                         Expanded(
@@ -604,154 +843,35 @@ class _OnlineStoryDetailScreenState extends State<OnlineStoryDetailScreen> {
                               Text(
                                 title,
                                 style: const TextStyle(
-                                  fontSize: 20,
+                                  fontSize: 22,
                                   fontWeight: FontWeight.bold,
+                                  height: 1.25,
                                 ),
+                                maxLines: 3,
+                                overflow: TextOverflow.ellipsis,
                               ),
-                              const SizedBox(height: 8),
+                              const SizedBox(height: 10),
                               Text(
-                                'Tác giả: $author',
-                                style: TextStyle(color: Colors.grey.shade600),
+                                author,
+                                style: TextStyle(
+                                  fontSize: 16,
+                                  color: isDark
+                                      ? Colors.white70
+                                      : Colors.black54,
+                                ),
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
                               ),
                               const SizedBox(height: 4),
-                              Row(
-                                children: [
-                                  Icon(
-                                    status == SManga.completed
-                                        ? Icons.check_circle_outline
-                                        : Icons.schedule,
-                                    size: 14,
-                                    color: status == SManga.completed
-                                        ? Colors.green
-                                        : Colors.orange,
-                                  ),
-                                  const SizedBox(width: 4),
-                                  Text(
-                                    statusText,
-                                    style: TextStyle(
-                                      fontSize: 12,
-                                      color: Colors.grey.shade600,
-                                    ),
-                                  ),
-                                ],
+                              Text(
+                                statusText,
+                                style: TextStyle(
+                                  fontSize: 15,
+                                  color: isDark
+                                      ? Colors.white60
+                                      : Colors.black45,
+                                ),
                               ),
-                              if (!_isLoadingChapters) ...[
-                                const SizedBox(height: 4),
-                                Text(
-                                  '${_chapters.length} chương',
-                                  style: TextStyle(
-                                    fontSize: 12,
-                                    color: Colors.grey.shade600,
-                                    fontWeight: FontWeight.w600,
-                                  ),
-                                ),
-                              ],
-                              const SizedBox(height: 12),
-                              if (_isLoading) const CircularProgressIndicator(),
-                              if (!_isLoading) ...[
-                                // Nút thêm vào kệ sách
-                                SizedBox(
-                                  width: double.infinity,
-                                  child: FilledButton.icon(
-                                    onPressed: _addedToLibrary
-                                        ? null
-                                        : _addToLibrary,
-                                    icon: _isAddingToLibrary
-                                        ? const SizedBox(
-                                            width: 16,
-                                            height: 16,
-                                            child: CircularProgressIndicator(
-                                              strokeWidth: 2,
-                                              color: Colors.white,
-                                            ),
-                                          )
-                                        : Icon(
-                                            _addedToLibrary
-                                                ? Icons.check_rounded
-                                                : Icons.library_add_outlined,
-                                          ),
-                                    label: Text(
-                                      _addedToLibrary
-                                          ? 'Đã thêm vào kệ sách'
-                                          : 'Thêm vào kệ sách',
-                                    ),
-                                    style: FilledButton.styleFrom(
-                                      backgroundColor: _addedToLibrary
-                                          ? Colors.grey
-                                          : colorScheme.primary,
-                                    ),
-                                  ),
-                                ),
-                                if (_chapters.isNotEmpty) ...[
-                                  const SizedBox(height: 8),
-                                  SizedBox(
-                                    width: double.infinity,
-                                    child: OutlinedButton.icon(
-                                      onPressed: () {
-                                        Navigator.push(
-                                          context,
-                                          MaterialPageRoute(
-                                            builder: (_) =>
-                                                OnlineChapterReaderScreen(
-                                                  plugin: widget.plugin,
-                                                  storyUrl: widget.storyUrl,
-                                                  chapterUrl:
-                                                      _chapters.first.url,
-                                                  chapterTitle:
-                                                      _chapters
-                                                          .first
-                                                          .name
-                                                          .isNotEmpty
-                                                      ? _chapters.first.name
-                                                      : 'Chương 1',
-                                                  storyTitle: _storyTitle,
-                                                  allChapters:
-                                                      _buildChapterNavList(),
-                                                  currentIndex: 0,
-                                                ),
-                                          ),
-                                        );
-                                      },
-                                      icon: const Icon(
-                                        Icons.play_arrow_rounded,
-                                      ),
-                                      label: const Text('Đọc từ đầu'),
-                                    ),
-                                  ),
-                                  const SizedBox(height: 8),
-                                  Row(
-                                    children: [
-                                      Expanded(
-                                        child: OutlinedButton.icon(
-                                          onPressed: _startDownloadFlow,
-                                          icon: const Icon(
-                                            Icons.download_rounded,
-                                            size: 18,
-                                          ),
-                                          label: const Text(
-                                            'Tải Offline',
-                                            style: TextStyle(fontSize: 13),
-                                          ),
-                                        ),
-                                      ),
-                                      const SizedBox(width: 8),
-                                      Expanded(
-                                        child: OutlinedButton.icon(
-                                          onPressed: _exportEpubFlow,
-                                          icon: const Icon(
-                                            Icons.import_export_rounded,
-                                            size: 18,
-                                          ),
-                                          label: const Text(
-                                            'Xuất EPUB',
-                                            style: TextStyle(fontSize: 13),
-                                          ),
-                                        ),
-                                      ),
-                                    ],
-                                  ),
-                                ],
-                              ],
                             ],
                           ),
                         ),
@@ -759,9 +879,105 @@ class _OnlineStoryDetailScreenState extends State<OnlineStoryDetailScreen> {
                     ),
                   ),
                 ),
+
+                // 2. Section "Thông tin" - Screenshot 1
                 SliverToBoxAdapter(
                   child: Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 16.0),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 16,
+                      vertical: 8,
+                    ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Text(
+                          'Thông tin',
+                          style: TextStyle(
+                            fontSize: 18,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                        const SizedBox(height: 10),
+                        Text.rich(
+                          TextSpan(
+                            children: [
+                              TextSpan(
+                                text: 'Thể loại: ',
+                                style: TextStyle(
+                                  color: isDark
+                                      ? Colors.white60
+                                      : Colors.black54,
+                                ),
+                              ),
+                              TextSpan(
+                                text: genresText,
+                                style: TextStyle(
+                                  color: isDark
+                                      ? Colors.white
+                                      : Colors.black87,
+                                ),
+                              ),
+                            ],
+                          ),
+                          style: const TextStyle(fontSize: 14, height: 1.4),
+                        ),
+                        const SizedBox(height: 6),
+                        Text.rich(
+                          TextSpan(
+                            children: [
+                              TextSpan(
+                                text: 'Tác giả: ',
+                                style: TextStyle(
+                                  color: isDark
+                                      ? Colors.white60
+                                      : Colors.black54,
+                                ),
+                              ),
+                              TextSpan(
+                                text: author,
+                                style: TextStyle(
+                                  color: isDark
+                                      ? Colors.white
+                                      : Colors.black87,
+                                ),
+                              ),
+                            ],
+                          ),
+                          style: const TextStyle(fontSize: 14, height: 1.4),
+                        ),
+                        const SizedBox(height: 6),
+                        Text.rich(
+                          TextSpan(
+                            children: [
+                              TextSpan(
+                                text: 'Tình trạng: ',
+                                style: TextStyle(
+                                  color: isDark
+                                      ? Colors.white60
+                                      : Colors.black54,
+                                ),
+                              ),
+                              TextSpan(
+                                text: statusText,
+                                style: TextStyle(
+                                  color: isDark
+                                      ? Colors.white
+                                      : Colors.black87,
+                                ),
+                              ),
+                            ],
+                          ),
+                          style: const TextStyle(fontSize: 14, height: 1.4),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+
+                // 3. Section "Giới thiệu" - Screenshot 1
+                SliverToBoxAdapter(
+                  child: Padding(
+                    padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
@@ -772,81 +988,219 @@ class _OnlineStoryDetailScreenState extends State<OnlineStoryDetailScreen> {
                             fontWeight: FontWeight.bold,
                           ),
                         ),
-                        const SizedBox(height: 8),
+                        const SizedBox(height: 10),
                         Text(
                           desc,
-                          maxLines: 6,
-                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            fontSize: 14,
+                            height: 1.5,
+                            color: isDark
+                                ? Colors.white.withAlpha(220)
+                                : Colors.black87,
+                          ),
+                          maxLines: _isDescriptionExpanded ? null : 4,
+                          overflow: _isDescriptionExpanded
+                              ? TextOverflow.visible
+                              : TextOverflow.ellipsis,
                         ),
-                        const SizedBox(height: 24),
+                        if (desc.length > 150)
+                          Align(
+                            alignment: Alignment.centerRight,
+                            child: TextButton(
+                              onPressed: () {
+                                setState(() {
+                                  _isDescriptionExpanded =
+                                      !_isDescriptionExpanded;
+                                });
+                              },
+                              child: Text(
+                                _isDescriptionExpanded
+                                    ? 'Thu gọn'
+                                    : 'Xem thêm',
+                                style: TextStyle(color: colorScheme.primary),
+                              ),
+                            ),
+                          ),
+                      ],
+                    ),
+                  ),
+                ),
+
+                // 4. Section "Bình luận" - Screenshot 1
+                SliverToBoxAdapter(
+                  child: Padding(
+                    padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
                         Row(
                           children: [
                             const Text(
-                              'Danh sách chương',
+                              'Bình luận',
                               style: TextStyle(
                                 fontSize: 18,
                                 fontWeight: FontWeight.bold,
                               ),
                             ),
                             const Spacer(),
-                            if (!_isLoadingChapters && _chapters.isNotEmpty)
-                              Text(
-                                '${_chapters.length} chương',
+                            TextButton(
+                              onPressed: _openBrowser,
+                              child: Text(
+                                'Xem thêm',
                                 style: TextStyle(
-                                  fontSize: 13,
-                                  color: Colors.grey.shade600,
+                                  color: colorScheme.primary,
+                                  fontSize: 14,
                                 ),
                               ),
+                            ),
                           ],
                         ),
-                        const SizedBox(height: 8),
+                        Container(
+                          margin: const EdgeInsets.only(top: 4),
+                          padding: const EdgeInsets.all(12),
+                          decoration: BoxDecoration(
+                            color: isDark
+                                ? Colors.white.withAlpha(10)
+                                : Colors.black.withAlpha(6),
+                            borderRadius: BorderRadius.circular(10),
+                          ),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                'Độc giả',
+                                style: TextStyle(
+                                  fontWeight: FontWeight.bold,
+                                  fontSize: 14,
+                                  color: colorScheme.primary,
+                                ),
+                              ),
+                              const SizedBox(height: 4),
+                              Text(
+                                'Truyện rất hay và sâu lắng! Đọc xong cảm giác nhẹ nhõm.',
+                                style: TextStyle(
+                                  fontSize: 13,
+                                  color: isDark
+                                      ? Colors.white70
+                                      : Colors.black87,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
                       ],
                     ),
                   ),
                 ),
+
+                // 5. Section "Danh sách chương / Mục lục"
+                SliverToBoxAdapter(
+                  child: Padding(
+                    padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
+                    child: Row(
+                      children: [
+                        const Text(
+                          'Mục lục',
+                          style: TextStyle(
+                            fontSize: 18,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                        const Spacer(),
+                        if (!_isLoadingChapters)
+                          Text(
+                            '${_chapters.length} chương',
+                            style: TextStyle(
+                              fontSize: 13,
+                              color: isDark ? Colors.white54 : Colors.black54,
+                            ),
+                          ),
+                      ],
+                    ),
+                  ),
+                ),
+
                 if (_isLoadingChapters)
                   const SliverToBoxAdapter(
                     child: Center(
                       child: Padding(
-                        padding: EdgeInsets.all(16),
+                        padding: EdgeInsets.all(24),
                         child: CircularProgressIndicator(),
                       ),
                     ),
                   )
                 else
                   SliverList(
-                    delegate: SliverChildBuilderDelegate((context, index) {
-                      final chapter = _chapters[index];
-                      return ListTile(
-                        title: Text(
-                          chapter.name.isNotEmpty
-                              ? chapter.name
-                              : 'Chương ${index + 1}',
-                        ),
-                        trailing: const Icon(Icons.chevron_right),
-                        onTap: () {
-                          Navigator.push(
-                            context,
-                            MaterialPageRoute(
-                              builder: (_) => OnlineChapterReaderScreen(
-                                plugin: widget.plugin,
-                                storyUrl: widget.storyUrl,
-                                chapterUrl: chapter.url,
-                                chapterTitle: chapter.name.isNotEmpty
-                                    ? chapter.name
-                                    : 'Chương ${index + 1}',
-                                storyTitle: _storyTitle,
-                                allChapters: _buildChapterNavList(),
-                                currentIndex: index,
-                              ),
+                    delegate: SliverChildBuilderDelegate(
+                      (context, index) {
+                        final chapter = _chapters[index];
+                        final isRead = index == _savedChapterIndex;
+                        return ListTile(
+                          dense: true,
+                          selected: isRead,
+                          selectedTileColor:
+                              colorScheme.primary.withAlpha(20),
+                          leading: isRead
+                              ? Icon(
+                                  Icons.bookmark_rounded,
+                                  color: colorScheme.primary,
+                                  size: 18,
+                                )
+                              : Text(
+                                  '${index + 1}',
+                                  style: TextStyle(
+                                    fontSize: 12,
+                                    color: isDark
+                                        ? Colors.white38
+                                        : Colors.black38,
+                                  ),
+                                ),
+                          title: Text(
+                            chapter.name.isNotEmpty
+                                ? chapter.name
+                                : 'Chương ${index + 1}',
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                              fontWeight: isRead
+                                  ? FontWeight.bold
+                                  : FontWeight.normal,
+                              color: isRead ? colorScheme.primary : null,
                             ),
-                          );
-                        },
-                      );
-                    }, childCount: _chapters.length),
+                          ),
+                          trailing: isRead
+                              ? Container(
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 8,
+                                    vertical: 2,
+                                  ),
+                                  decoration: BoxDecoration(
+                                    color: colorScheme.primary.withAlpha(40),
+                                    borderRadius: BorderRadius.circular(10),
+                                  ),
+                                  child: Text(
+                                    'Đang đọc',
+                                    style: TextStyle(
+                                      fontSize: 10,
+                                      fontWeight: FontWeight.bold,
+                                      color: colorScheme.primary,
+                                    ),
+                                  ),
+                                )
+                              : const Icon(Icons.chevron_right, size: 18),
+                          onTap: () => _openReader(index),
+                        );
+                      },
+                      childCount: _chapters.length,
+                    ),
                   ),
+
+                const SliverToBoxAdapter(
+                  child: SizedBox(height: 32),
+                ),
               ],
             ),
     );
   }
 }
+

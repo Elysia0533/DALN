@@ -1,9 +1,12 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 
 /// Màn hình trình duyệt web tích hợp.
-/// Người dùng có thể đăng nhập tài khoản Hako (hoặc bất kỳ trang nào)
-/// và cookies/session sẽ được lưu trong WebView để plugin sử dụng lại.
+/// Phiên duyệt web là tạm thời (ephemeral):
+/// - Khi mở web: làm mới session để không lưu tài khoản cũ.
+/// - Khi thoát web: xóa sạch cookies/session/cache để bảo vệ tài khoản,
+///   tránh việc extension vô tình mang theo token tài khoản cào dữ liệu gây ban.
 class WebBrowserScreen extends StatefulWidget {
   final String initialUrl;
   final String title;
@@ -19,6 +22,7 @@ class WebBrowserScreen extends StatefulWidget {
 }
 
 class _WebBrowserScreenState extends State<WebBrowserScreen> {
+  static const _cookieChannel = MethodChannel('com.vbook.reader/cookie_manager');
   late final WebViewController _controller;
   bool _isLoading = true;
   int _loadingProgress = 0;
@@ -28,6 +32,7 @@ class _WebBrowserScreenState extends State<WebBrowserScreen> {
   bool _canGoForward = false;
   final TextEditingController _urlController = TextEditingController();
   bool _isEditingUrl = false;
+  bool _isExiting = false;
 
   @override
   void initState() {
@@ -43,6 +48,7 @@ class _WebBrowserScreenState extends State<WebBrowserScreen> {
       ..setNavigationDelegate(
         NavigationDelegate(
           onPageStarted: (url) {
+            if (!mounted) return;
             setState(() {
               _isLoading = true;
               _currentUrl = url;
@@ -51,10 +57,12 @@ class _WebBrowserScreenState extends State<WebBrowserScreen> {
             _refreshNavButtons();
           },
           onProgress: (progress) {
+            if (!mounted) return;
             setState(() => _loadingProgress = progress);
           },
           onPageFinished: (url) async {
             final title = await _controller.getTitle();
+            if (!mounted) return;
             setState(() {
               _isLoading = false;
               _currentUrl = url;
@@ -64,11 +72,55 @@ class _WebBrowserScreenState extends State<WebBrowserScreen> {
             _refreshNavButtons();
           },
           onWebResourceError: (error) {
+            if (!mounted) return;
             setState(() => _isLoading = false);
           },
         ),
-      )
-      ..loadRequest(Uri.parse(widget.initialUrl));
+      );
+
+    _initSessionAndLoad();
+  }
+
+  Future<void> _clearSessionData() async {
+    try {
+      await WebViewCookieManager().clearCookies();
+    } catch (e) {
+      debugPrint('[WebBrowser] Error clearing webview cookies: $e');
+    }
+
+    try {
+      await _controller.clearCache();
+    } catch (e) {
+      debugPrint('[WebBrowser] Error clearing webview cache: $e');
+    }
+
+    try {
+      await _controller.clearLocalStorage();
+    } catch (e) {
+      debugPrint('[WebBrowser] Error clearing local storage: $e');
+    }
+
+    try {
+      await _cookieChannel.invokeMethod('clearCookies');
+    } catch (e) {
+      debugPrint('[WebBrowser] Error clearing native cookies: $e');
+    }
+  }
+
+  Future<void> _initSessionAndLoad() async {
+    await _clearSessionData();
+    if (mounted) {
+      _controller.loadRequest(Uri.parse(widget.initialUrl));
+    }
+  }
+
+  Future<void> _handleExit() async {
+    if (_isExiting) return;
+    _isExiting = true;
+    await _clearSessionData();
+    if (mounted) {
+      Navigator.pop(context);
+    }
   }
 
   Future<void> _refreshNavButtons() async {
@@ -105,6 +157,7 @@ class _WebBrowserScreenState extends State<WebBrowserScreen> {
   @override
   void dispose() {
     _urlController.dispose();
+    _clearSessionData();
     super.dispose();
   }
 
@@ -113,21 +166,27 @@ class _WebBrowserScreenState extends State<WebBrowserScreen> {
     final colorScheme = Theme.of(context).colorScheme;
     final isDark = Theme.of(context).brightness == Brightness.dark;
 
-    return Scaffold(
-      backgroundColor: colorScheme.surface,
-      appBar: AppBar(
-        titleSpacing: 0,
-        leading: IconButton(
-          icon: const Icon(Icons.close),
-          onPressed: () => Navigator.pop(context),
-          tooltip: 'Đóng',
-        ),
-        title: _buildAddressBar(isDark, colorScheme),
-        actions: [
-          IconButton(
-            icon: _isLoading
-                ? const SizedBox(
-                    width: 20,
+    return PopScope(
+      canPop: false,
+      onPopInvokedWithResult: (didPop, result) async {
+        if (didPop) return;
+        await _handleExit();
+      },
+      child: Scaffold(
+        backgroundColor: colorScheme.surface,
+        appBar: AppBar(
+          titleSpacing: 0,
+          leading: IconButton(
+            icon: const Icon(Icons.close),
+            onPressed: _handleExit,
+            tooltip: 'Đóng',
+          ),
+          title: _buildAddressBar(isDark, colorScheme),
+          actions: [
+            IconButton(
+              icon: _isLoading
+                  ? const SizedBox(
+                      width: 20,
                     height: 20,
                     child: CircularProgressIndicator(strokeWidth: 2),
                   )
@@ -193,8 +252,9 @@ class _WebBrowserScreenState extends State<WebBrowserScreen> {
           Expanded(child: WebViewWidget(controller: _controller)),
         ],
       ),
-    );
-  }
+    ),
+  );
+}
 
   Widget _buildAddressBar(bool isDark, ColorScheme colorScheme) {
     return GestureDetector(
@@ -376,11 +436,11 @@ class _WebBrowserScreenState extends State<WebBrowserScreen> {
       ),
     );
     if (confirm == true) {
-      await WebViewCookieManager().clearCookies();
+      await _clearSessionData();
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
-            content: Text('Đã xoá cookies. Bạn đã đăng xuất.'),
+            content: Text('Đã xoá dữ liệu phiên & cookies. Bạn đã đăng xuất.'),
             behavior: SnackBarBehavior.floating,
           ),
         );

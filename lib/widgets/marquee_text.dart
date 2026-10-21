@@ -12,14 +12,14 @@ class MarqueeText extends StatelessWidget {
 
   const MarqueeText(
     this.text, {
-    Key? key,
+    super.key,
     this.style,
     this.height = 24.0,
     this.blankSpace = 30.0,
     this.velocity = 30.0,
     this.pauseAfterRound = const Duration(seconds: 1),
     this.startPadding = const Duration(seconds: 2),
-  }) : super(key: key);
+  });
 
   @override
   Widget build(BuildContext context) {

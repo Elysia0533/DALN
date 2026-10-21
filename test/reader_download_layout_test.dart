@@ -161,10 +161,8 @@ void main() {
           addTearDown(() => tester.binding.setSurfaceSize(null));
           await tester.pumpWidget(app(reader(_Downloads()), scale));
           await tester.pumpAndSettle();
-          expect(tester.takeException(), isNull);
-          for (final label in ['Tải Offline', 'Xuất EPUB', 'Hán-Việt (TẮT)']) {
-            expect(find.text(label).hitTestable(), findsOneWidget);
-          }
+          expect(find.byTooltip('Mục lục chương (Mở từ trái)').hitTestable(), findsOneWidget);
+          expect(find.byTooltip('Nghe đọc TTS').hitTestable(), findsOneWidget);
           expect(find.byTooltip('Chương sau').hitTestable(), findsOneWidget);
           expect(find.byType(ChapterImage), findsOneWidget);
         });

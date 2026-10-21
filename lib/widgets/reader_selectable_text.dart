@@ -15,6 +15,8 @@ class ReaderSelectableText extends StatelessWidget {
   final ReaderTextAction? onSearch;
   final ReaderTextAction? onSettings;
   final ReaderTextAction? onShare;
+  final ReaderTextAction? onTranslate;
+  final VoidCallback? onTap;
 
   const ReaderSelectableText(
     this.text, {
@@ -27,6 +29,8 @@ class ReaderSelectableText extends StatelessWidget {
     this.onSearch,
     this.onSettings,
     this.onShare,
+    this.onTranslate,
+    this.onTap,
   });
 
   @override
@@ -35,6 +39,7 @@ class ReaderSelectableText extends StatelessWidget {
       text,
       style: style,
       textAlign: textAlign,
+      onTap: onTap,
       contextMenuBuilder: (context, editableTextState) {
         final value = editableTextState.textEditingValue;
         final selection = value.selection;
@@ -104,6 +109,14 @@ class ReaderSelectableText extends StatelessWidget {
                 onPressed: () {
                   editableTextState.hideToolbar();
                   onShare!(selectedText);
+                },
+              ),
+            if (onTranslate != null)
+              ContextMenuButtonItem(
+                label: 'Dịch với Ellie 🌸',
+                onPressed: () {
+                  editableTextState.hideToolbar(false);
+                  onTranslate!(selectedText);
                 },
               ),
           ],

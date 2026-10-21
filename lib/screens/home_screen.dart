@@ -12,7 +12,6 @@ import '../services/extension_service.dart';
 import '../theme/theme_provider.dart';
 import '../utils/file_name_utils.dart';
 import '../widgets/story_cover_image.dart';
-import '../widgets/marquee_text.dart';
 import '../widgets/background_download_banner.dart';
 import 'story_detail_screen.dart';
 import 'online_story_detail_screen.dart';
@@ -399,6 +398,7 @@ class _HomeScreenState extends State<HomeScreen> {
             storyUrl: story.storyUrl,
             initialTitle: story.title,
             initialCover: story.iconUrl,
+            storyId: story.id,
           ),
         ),
       );
@@ -496,14 +496,16 @@ class _HomeScreenState extends State<HomeScreen> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    MarqueeText(
+                    Text(
                       story.title,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
                       style: TextStyle(
                         color: colorScheme.onSurface,
                         fontWeight: FontWeight.w700,
-                        fontSize: 14,
+                        fontSize: 13,
+                        height: 1.25,
                       ),
-                      height: 18,
                     ),
                     const SizedBox(height: 4),
                     Text(
@@ -583,15 +585,19 @@ class _HomeScreenState extends State<HomeScreen> {
             ),
           ),
           const SizedBox(height: 6),
-          MarqueeText(
-            story.title,
-            style: TextStyle(
-              color: colorScheme.onSurface,
-              fontWeight: FontWeight.w700,
-              fontSize: 13,
-              height: 1.22,
+          SizedBox(
+            height: 38,
+            child: Text(
+              story.title,
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                color: colorScheme.onSurface,
+                fontWeight: FontWeight.w600,
+                fontSize: 11,
+                height: 1.2,
+              ),
             ),
-            height: 16,
           ),
         ],
       ),
@@ -720,8 +726,8 @@ class _HomeScreenState extends State<HomeScreen> {
                               SliverGridDelegateWithFixedCrossAxisCount(
                                 crossAxisCount: _columnCount,
                                 childAspectRatio: _columnCount == 2
-                                    ? 0.62
-                                    : 0.58,
+                                    ? 0.54
+                                    : 0.48,
                                 crossAxisSpacing: 14,
                                 mainAxisSpacing: 18,
                               ),

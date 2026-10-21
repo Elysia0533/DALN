@@ -156,7 +156,7 @@ class FirebaseBackendService {
         debugPrint('Lỗi cập nhật profile sau khi register: $e');
       }
       await refreshedUser.sendEmailVerification();
-      return _appUserFromFirebase(refreshedUser);
+      return await _appUserFromFirebase(refreshedUser);
     } on firebase_auth.FirebaseAuthException catch (e) {
       throw Exception(_authErrorMessage(e));
     }
@@ -192,7 +192,7 @@ class FirebaseBackendService {
       } catch (e) {
         debugPrint('Lỗi cập nhật profile sau khi login: $e');
       }
-      return _appUserFromFirebase(refreshedUser);
+      return await _appUserFromFirebase(refreshedUser);
     } on firebase_auth.FirebaseAuthException catch (e) {
       throw Exception(_authErrorMessage(e));
     }
@@ -238,7 +238,7 @@ class FirebaseBackendService {
         'emailVerified': refreshedUser.emailVerified,
         'updatedAt': FieldValue.serverTimestamp(),
       }, SetOptions(merge: true));
-      return _appUserFromFirebase(refreshedUser);
+      return await _appUserFromFirebase(refreshedUser);
     } on firebase_auth.FirebaseAuthException catch (e) {
       throw Exception(_authErrorMessage(e));
     }
@@ -268,7 +268,7 @@ class FirebaseBackendService {
       } catch (e) {
         debugPrint('Lỗi cập nhật profile sau khi Google login: $e');
       }
-      return _appUserFromFirebase(user);
+      return await _appUserFromFirebase(user);
     } on firebase_auth.FirebaseAuthException catch (e) {
       throw Exception(_authErrorMessage(e));
     } catch (e) {
@@ -327,7 +327,7 @@ class FirebaseBackendService {
       if (refreshedUser == null || !refreshedUser.emailVerified) return null;
       await _refreshVerifiedToken(refreshedUser);
       await _upsertProfile(refreshedUser);
-      return _appUserFromFirebase(refreshedUser);
+      return await _appUserFromFirebase(refreshedUser);
     } on firebase_auth.FirebaseAuthException catch (e) {
       debugPrint('Không thể làm mới phiên đăng nhập: ${_authErrorMessage(e)}');
       return null;

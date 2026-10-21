@@ -15,7 +15,7 @@ dependencies:
   provider: ^6.1.5+1
   http: ^1.6.0
   shared_preferences: ^2.5.5
-  file_picker: ^11.0.2
+  file_picker: ^11.0.3
   epub_view: ^3.2.0
   syncfusion_flutter_pdfviewer: ^33.2.5
   uuid: ^4.5.3
@@ -29,7 +29,7 @@ dependencies:
   firebase_core: ^4.10.0
   firebase_auth: ^6.5.2
   cloud_firestore: ^6.5.0
-  html: ^0.15.5
+  html: 0.15.6
   cached_network_image: ^3.4.1
   photo_view: ^0.15.0
   archive: ^3.6.1
@@ -41,6 +41,7 @@ dependencies:
   google_sign_in: ^6.2.2
   http_parser: ^4.1.2
   marquee: ^2.3.0
+  firebase_ai: ^4.0.0
 
 dev_dependencies:
   flutter_test:
@@ -56,3 +57,6 @@ flutter:
     - assets/offline_stories/
     - assets/branding/
     - assets/covers/
+dependency_overrides:
+  html: 0.15.6
+  csslib: 0.17.2

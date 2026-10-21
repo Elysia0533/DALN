@@ -1562,7 +1562,7 @@ class GoogleDriveService {
         if (await outputFile.exists()) {
           await outputFile.delete();
         }
-        return tempFile.rename(outputFile.path);
+        return await tempFile.rename(outputFile.path);
       } catch (e) {
         lastError = e;
         if (await tempFile.exists()) {

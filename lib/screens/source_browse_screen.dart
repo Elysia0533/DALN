@@ -1,5 +1,6 @@
 import 'dart:io';
 import 'package:flutter/material.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../models/plugin_info.dart';
 import '../services/plugin/vbook_engine_channel.dart';
 import '../services/plugin/plugin_loader.dart';
@@ -11,17 +12,25 @@ import '../widgets/marquee_text.dart';
 import 'online_story_detail_screen.dart';
 import 'web_browser_screen.dart';
 import 'extension_screen.dart';
+import 'home_screen.dart';
 
 class SourceBrowseScreen extends StatefulWidget {
+  static const String prefKeyLastActiveExtension = 'last_active_extension_id';
   final PluginInfo plugin;
+  final bool isStartupExtension;
 
-  const SourceBrowseScreen({super.key, required this.plugin});
+  const SourceBrowseScreen({
+    super.key,
+    required this.plugin,
+    this.isStartupExtension = false,
+  });
 
   @override
   State<SourceBrowseScreen> createState() => _SourceBrowseScreenState();
 }
 
 class _SourceBrowseScreenState extends State<SourceBrowseScreen> {
+
   late PluginInfo _currentPlugin;
   List<PluginInfo> _installedPlugins = [];
   bool _isLoading = true;
@@ -44,10 +53,38 @@ class _SourceBrowseScreenState extends State<SourceBrowseScreen> {
   final ScrollController _scrollController = ScrollController();
   final ExtensionSearchService _searchService = ExtensionSearchService();
 
+  Future<void> _saveActiveExtension(String pluginId) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(SourceBrowseScreen.prefKeyLastActiveExtension, pluginId);
+    } catch (e) {
+      debugPrint('[SourceBrowseScreen] Error saving active extension: $e');
+    }
+  }
+
+  Future<void> _clearActiveExtension() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.remove(SourceBrowseScreen.prefKeyLastActiveExtension);
+    } catch (e) {
+      debugPrint('[SourceBrowseScreen] Error clearing active extension: $e');
+    }
+  }
+
+  Future<void> _returnToRoot() async {
+    await _clearActiveExtension();
+    if (!mounted) return;
+    Navigator.of(context).pushAndRemoveUntil(
+      MaterialPageRoute(builder: (_) => const HomeScreen()),
+      (route) => false,
+    );
+  }
+
   @override
   void initState() {
     super.initState();
     _currentPlugin = widget.plugin;
+    _saveActiveExtension(_currentPlugin.id);
     _scrollController.addListener(_onScroll);
     _loadInstalledPlugins();
     _loadHome();
@@ -308,6 +345,7 @@ class _SourceBrowseScreenState extends State<SourceBrowseScreen> {
 
   void _switchPlugin(PluginInfo plugin) {
     if (_currentPlugin.id == plugin.id) return;
+    _saveActiveExtension(plugin.id);
     setState(() {
       _currentPlugin = plugin;
       _dynamicTabs = [];
@@ -388,6 +426,26 @@ class _SourceBrowseScreenState extends State<SourceBrowseScreen> {
                   ),
                 ),
                 const Divider(),
+                ListTile(
+                  leading: CircleAvatar(
+                    backgroundColor: Theme.of(context).colorScheme.primaryContainer,
+                    child: Icon(
+                      Icons.home_rounded,
+                      color: Theme.of(context).colorScheme.primary,
+                    ),
+                  ),
+                  title: const Text(
+                    'Trở về giao diện gốc',
+                    style: TextStyle(fontWeight: FontWeight.bold),
+                  ),
+                  subtitle: const Text('Về kệ sách và màn hình chính ứng dụng'),
+                  trailing: const Icon(Icons.arrow_forward_ios_rounded, size: 14),
+                  onTap: () {
+                    Navigator.pop(context);
+                    _returnToRoot();
+                  },
+                ),
+                const Divider(height: 1),
                 if (_installedPlugins.isEmpty)
                   const Padding(
                     padding: EdgeInsets.all(24),
@@ -491,13 +549,22 @@ class _SourceBrowseScreenState extends State<SourceBrowseScreen> {
                   ],
                 ),
                 const SizedBox(height: 16),
-                const Divider(),
                 ListTile(
-                  leading: const Icon(Icons.extension_outlined),
-                  title: const Text('T.cả phần mở rộng'),
+                  leading: const Icon(Icons.swap_horiz_rounded),
+                  title: const Text('Chọn extension khác'),
+                  subtitle: const Text('Đổi sang nguồn truyện khác đã cài đặt'),
                   onTap: () {
                     Navigator.pop(context);
                     _showPluginSelectorBottomSheet();
+                  },
+                ),
+                ListTile(
+                  leading: const Icon(Icons.home_outlined),
+                  title: const Text('Trở về giao diện gốc'),
+                  subtitle: const Text('Tắt tự động mở extension khi vào app'),
+                  onTap: () {
+                    Navigator.pop(context);
+                    _returnToRoot();
                   },
                 ),
                 ListTile(
@@ -562,8 +629,19 @@ class _SourceBrowseScreenState extends State<SourceBrowseScreen> {
   @override
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
-    return Scaffold(
+    final scaffold = Scaffold(
       appBar: AppBar(
+        leading: widget.isStartupExtension
+            ? IconButton(
+                icon: const Icon(Icons.home_rounded),
+                tooltip: 'Về giao diện gốc',
+                onPressed: _returnToRoot,
+              )
+            : IconButton(
+                icon: const Icon(Icons.arrow_back),
+                tooltip: 'Trở về',
+                onPressed: () => Navigator.pop(context),
+              ),
         title: _isSearching
             ? TextField(
                 controller: _searchController,
@@ -602,26 +680,44 @@ class _SourceBrowseScreenState extends State<SourceBrowseScreen> {
                 ),
               ),
         actions: [
-          if (_currentPlugin.searchCapabilities.supportsKeyword)
+          if (_isSearching)
             IconButton(
-              key: const ValueKey('extension-keyword-search'),
-              icon: Icon(_isSearching ? Icons.close : Icons.search),
-              tooltip: _isSearching ? 'Đóng tìm kiếm' : 'Tìm kiếm',
+              icon: const Icon(Icons.close),
               onPressed: () {
                 setState(() {
-                  _isSearching = !_isSearching;
-                  if (!_isSearching) {
-                    _searchController.clear();
-                    _loadHome();
-                  }
+                  _isSearching = false;
+                  _searchController.clear();
+                  _loadHome();
                 });
               },
+            )
+          else ...[
+            if (_currentPlugin.searchCapabilities.supportsKeyword)
+              IconButton(
+                key: const ValueKey('extension-keyword-search'),
+                icon: const Icon(Icons.search),
+                tooltip: 'Tìm kiếm',
+                onPressed: () {
+                  setState(() => _isSearching = true);
+                },
+              ),
+            IconButton(
+              icon: const Icon(Icons.swap_horiz_rounded),
+              tooltip: 'Chọn extension khác',
+              onPressed: _showPluginSelectorBottomSheet,
             ),
-          IconButton(
-            icon: const Icon(Icons.tune_rounded),
-            tooltip: 'Tùy chọn hiển thị & nguồn',
-            onPressed: _showOptionsMenu,
-          ),
+            if (!widget.isStartupExtension)
+              IconButton(
+                icon: const Icon(Icons.home_outlined),
+                tooltip: 'Về giao diện gốc',
+                onPressed: _returnToRoot,
+              ),
+            IconButton(
+              icon: const Icon(Icons.tune_rounded),
+              tooltip: 'Tùy chọn hiển thị & nguồn',
+              onPressed: _showOptionsMenu,
+            ),
+          ],
         ],
       ),
       body: Column(
@@ -693,6 +789,27 @@ class _SourceBrowseScreenState extends State<SourceBrowseScreen> {
         ],
       ),
     );
+
+    if (widget.isStartupExtension) {
+      return PopScope(
+        canPop: false,
+        onPopInvokedWithResult: (didPop, result) async {
+          if (didPop) return;
+          if (_isSearching) {
+            setState(() {
+              _isSearching = false;
+              _searchController.clear();
+              _loadHome();
+            });
+            return;
+          }
+          await _returnToRoot();
+        },
+        child: scaffold,
+      );
+    }
+
+    return scaffold;
   }
 
   Widget _buildTabChip({
@@ -731,7 +848,7 @@ class _SourceBrowseScreenState extends State<SourceBrowseScreen> {
 
   Widget _buildGridView(bool isDark) {
     final crossCount = _layoutMode == 0 ? 3 : 2;
-    final childRatio = _layoutMode == 0 ? 0.56 : 0.64;
+    final childRatio = _layoutMode == 0 ? 0.48 : 0.54;
 
     return GridView.builder(
       controller: _scrollController,
@@ -769,13 +886,18 @@ class _SourceBrowseScreenState extends State<SourceBrowseScreen> {
                 ),
               ),
               const SizedBox(height: 6),
-              MarqueeText(
-                story.title,
-                style: const TextStyle(
-                  fontSize: 12.5,
-                  fontWeight: FontWeight.bold,
+              SizedBox(
+                height: 38,
+                child: Text(
+                  story.title,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    fontSize: 11,
+                    fontWeight: FontWeight.bold,
+                    height: 1.2,
+                  ),
                 ),
-                height: 16,
               ),
               if (story.description.isNotEmpty) ...[
                 const SizedBox(height: 2),

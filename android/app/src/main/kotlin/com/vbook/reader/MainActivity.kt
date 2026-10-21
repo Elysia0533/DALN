@@ -79,16 +79,23 @@ class MainActivity : FlutterActivity() {
         }
         
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, COOKIE_CHANNEL).setMethodCallHandler { call, result ->
-            if (call.method == "getCookies") {
-                val url = call.argument<String>("url")
-                if (url != null) {
-                    val cookies = CookieManager.getInstance().getCookie(url)
-                    result.success(cookies ?: "")
-                } else {
-                    result.error("INVALID_URL", "URL is null", null)
+            when (call.method) {
+                "getCookies" -> {
+                    val url = call.argument<String>("url")
+                    if (url != null) {
+                        val cookies = CookieManager.getInstance().getCookie(url)
+                        result.success(cookies ?: "")
+                    } else {
+                        result.error("INVALID_URL", "URL is null", null)
+                    }
                 }
-            } else {
-                result.notImplemented()
+                "clearCookies" -> {
+                    CookieManager.getInstance().removeAllCookies { success ->
+                        CookieManager.getInstance().flush()
+                        result.success(success)
+                    }
+                }
+                else -> result.notImplemented()
             }
         }
 

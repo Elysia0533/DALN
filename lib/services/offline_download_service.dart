@@ -59,7 +59,7 @@ class OfflineDownloadService extends ChangeNotifier {
   ChapterImageLoader _loadImage = ChapterImageService.load;
   Future<bool> Function(PluginInfo)? _prepareSource;
   static int _sessionSequence = 0;
-  Duration _requestDelay = const Duration(milliseconds: 400);
+  Duration _requestDelay = const Duration(milliseconds: 1200);
   bool _isRunning = false;
   PluginInfo? _lastPlugin;
   List<Map<String, String>> _lastChapters = const [];

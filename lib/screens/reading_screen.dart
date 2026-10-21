@@ -413,6 +413,7 @@ class _ReadingScreenState extends State<ReadingScreen> {
                         onSearch: _showSelectionSearch,
                         onSettings: (_) => _showSettings(),
                         onShare: _shareSelection,
+                        onTap: () => setState(() => _showToolbar = !_showToolbar),
                       ),
                       const SizedBox(height: 24),
                       Builder(
@@ -448,6 +449,8 @@ class _ReadingScreenState extends State<ReadingScreen> {
                                 onSearch: _showSelectionSearch,
                                 onSettings: (_) => _showSettings(),
                                 onShare: _shareSelection,
+                                onTap: () =>
+                                    setState(() => _showToolbar = !_showToolbar),
                               );
                             }),
                           );
@@ -1184,6 +1187,7 @@ class _ParagraphWidget extends StatelessWidget {
   final ReaderTextAction? onSearch;
   final ReaderTextAction? onSettings;
   final ReaderTextAction? onShare;
+  final VoidCallback? onTap;
 
   const _ParagraphWidget({
     super.key,
@@ -1197,6 +1201,7 @@ class _ParagraphWidget extends StatelessWidget {
     this.onSearch,
     this.onSettings,
     this.onShare,
+    this.onTap,
   });
 
   @override
@@ -1237,6 +1242,7 @@ class _ParagraphWidget extends StatelessWidget {
             onSearch: onSearch,
             onSettings: onSettings,
             onShare: onShare,
+            onTap: onTap,
           ),
         );
       },

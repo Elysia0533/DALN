@@ -40,7 +40,9 @@ class _CommunityScreenState extends State<CommunityScreen> {
     final loadToken = user.isLoggedIn ? user.token : 'guest';
     if (_loadedToken != loadToken) {
       _loadedToken = loadToken;
-      _loadMessages();
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _loadMessages();
+      });
     }
   }
 

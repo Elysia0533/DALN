@@ -14,6 +14,8 @@ import '../theme/reading_settings_provider.dart';
 import '../widgets/reader_selectable_text.dart';
 import '../widgets/tts_control_sheet.dart';
 import '../widgets/tts_player_container.dart';
+import '../features/translator_bot/ui/ellie_quick_translate_sheet.dart';
+import '../features/translator_bot/ui/ellie_chat_screen.dart';
 
 class ChapterReaderScreen extends StatefulWidget {
   final Story story;
@@ -640,6 +642,29 @@ class _ChapterReaderScreenState extends State<ChapterReaderScreen> {
     );
   }
 
+  void _translateSelection(String selectedText) {
+    if (selectedText.trim().isEmpty) return;
+    EllieQuickTranslateSheet.show(
+      context,
+      selectedText.trim(),
+      title: _chapters.isNotEmpty ? _chapters[_currentIndex].title : 'Đoạn văn',
+    );
+  }
+
+  void _translateCurrentChapterWithEllie() {
+    if (_chapters.isEmpty) return;
+    final ch = _chapters[_currentIndex];
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => EllieChatScreen(
+          initialText: ch.plain,
+          initialTitle: ch.title,
+        ),
+      ),
+    );
+  }
+
   void _handleReaderMenuAction(String action) {
     switch (action) {
       case 'bookmarks':
@@ -656,6 +681,9 @@ class _ChapterReaderScreenState extends State<ChapterReaderScreen> {
               ? () => _goToChapter(_currentIndex + 1)
               : null,
         );
+        break;
+      case 'translate':
+        _translateCurrentChapterWithEllie();
         break;
     }
   }
@@ -737,6 +765,7 @@ class _ChapterReaderScreenState extends State<ChapterReaderScreen> {
                             onSearch: _showSelectionSearch,
                             onSettings: (_) => _showSettings(),
                             onShare: _shareSelection,
+                            onTranslate: _translateSelection,
                           ),
                         ),
                       ),
@@ -784,6 +813,7 @@ class _ChapterReaderScreenState extends State<ChapterReaderScreen> {
                                       onSearch: _showSelectionSearch,
                                       onSettings: (_) => _showSettings(),
                                       onShare: _shareSelection,
+                                      onTranslate: _translateSelection,
                                     );
                                   },
                                 ),
@@ -938,6 +968,13 @@ class _ChapterReaderScreenState extends State<ChapterReaderScreen> {
                                   label: TtsService.instance.isPlaying
                                       ? 'Tạm dừng audio'
                                       : 'Đọc bằng audio',
+                                ),
+                              ),
+                              const PopupMenuItem(
+                                value: 'translate',
+                                child: _ReaderMenuItem(
+                                  icon: Icons.auto_awesome_rounded,
+                                  label: 'Dịch chương với Ellie 🌸',
                                 ),
                               ),
                             ],
@@ -1775,6 +1812,7 @@ class _ParagraphWidget extends StatelessWidget {
   final ReaderTextAction? onSearch;
   final ReaderTextAction? onSettings;
   final ReaderTextAction? onShare;
+  final ReaderTextAction? onTranslate;
 
   const _ParagraphWidget({
     super.key,
@@ -1788,6 +1826,7 @@ class _ParagraphWidget extends StatelessWidget {
     this.onSearch,
     this.onSettings,
     this.onShare,
+    this.onTranslate,
   });
 
   @override
@@ -1830,6 +1869,7 @@ class _ParagraphWidget extends StatelessWidget {
             onSearch: onSearch,
             onSettings: onSettings,
             onShare: onShare,
+            onTranslate: onTranslate,
           ),
         );
       },

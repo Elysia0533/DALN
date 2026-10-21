@@ -264,10 +264,10 @@ class UserProvider extends ChangeNotifier {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString(_nameKey, _name);
     await prefs.setInt(_avatarColorKey, colorValue);
+    notifyListeners();
     unawaited(ApiService.syncLocalDataToCloud());
     unawaited(ApiService.mergeCloudLibraryIntoLocal());
     unawaited(_syncAdminClaimFromCurrentUser(forceRefresh: false));
-    notifyListeners();
   }
 
   Future<void> refreshSession() async {

@@ -274,6 +274,19 @@ class _StoryDetailScreenState extends State<StoryDetailScreen> {
           (_story.pluginId.isNotEmpty && _story.storyUrl.isNotEmpty)) &&
       _story.localPath.isEmpty;
 
+  Future<void> _refreshStory() async {
+    final stories = await ApiService.fetchPersonalStories();
+    final updated = stories.cast<Story?>().firstWhere(
+      (s) => s?.id == _story.id,
+      orElse: () => null,
+    );
+    if (updated != null && mounted) {
+      setState(() {
+        _story = updated;
+      });
+    }
+  }
+
   Future<void> _openExtensionOnline() async {
     final installed = await ExtensionService.getInstalledPlugins();
     final plugin = installed.firstWhere(
@@ -293,17 +306,21 @@ class _StoryDetailScreenState extends State<StoryDetailScreen> {
     );
 
     if (!mounted) return;
-    Navigator.push(
+    await Navigator.push(
       context,
       MaterialPageRoute(
         builder: (_) => OnlineStoryDetailScreen(
           plugin: plugin,
           storyUrl: _story.storyUrl,
+          storyId: _story.id,
           initialTitle: _story.title,
           initialCover: _story.iconUrl,
         ),
       ),
     );
+    if (mounted) {
+      _refreshStory();
+    }
   }
 
   Future<void> _startReading() async {
@@ -323,21 +340,24 @@ class _StoryDetailScreenState extends State<StoryDetailScreen> {
       }
       if (_story.isFromDrive && _story.driveFileId.isNotEmpty) {
         if (_storyFileType == 'pdf') {
-          Navigator.push(
+          await Navigator.push(
             context,
             MaterialPageRoute(builder: (_) => PdfReaderScreen(story: _story)),
           );
+          if (mounted) _refreshStory();
           return;
         }
         if (_storyFileType == 'epub') {
-          Navigator.push(
+          await Navigator.push(
             context,
             MaterialPageRoute(builder: (_) => EpubReaderScreen(story: _story)),
           );
+          if (mounted) _refreshStory();
           return;
         }
         if (_storyFileType == 'txt') {
           await _openDriveTxtOnline();
+          if (mounted) _refreshStory();
           return;
         }
       }
@@ -352,20 +372,23 @@ class _StoryDetailScreenState extends State<StoryDetailScreen> {
     }
     final fileType = _storyFileType;
     if (fileType == 'pdf') {
-      Navigator.push(
+      await Navigator.push(
         context,
         MaterialPageRoute(builder: (_) => PdfReaderScreen(story: _story)),
       );
     } else if (fileType == 'epub') {
-      Navigator.push(
+      await Navigator.push(
         context,
         MaterialPageRoute(builder: (_) => ChapterReaderScreen(story: _story)),
       );
     } else {
-      Navigator.push(
+      await Navigator.push(
         context,
         MaterialPageRoute(builder: (_) => ReadingScreen(story: _story)),
       );
+    }
+    if (mounted) {
+      _refreshStory();
     }
   }
 
