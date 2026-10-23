@@ -23,6 +23,23 @@ class AppIdentityService {
     }
   }
 
+  static Future<String> geminiApiKey() async {
+    if (kIsWeb || defaultTargetPlatform != TargetPlatform.android) {
+      return '';
+    }
+
+    try {
+      final result = await _channel.invokeMethod<String>(
+        'getGeminiApiKey',
+      );
+      return result?.trim() ?? '';
+    } on MissingPluginException {
+      return '';
+    } on PlatformException {
+      return '';
+    }
+  }
+
   static Future<Map<String, String>> googleApiKeyRestrictionHeaders() async {
     if (kIsWeb || defaultTargetPlatform != TargetPlatform.android) {
       return const {};

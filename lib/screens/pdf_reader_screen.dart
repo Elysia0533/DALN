@@ -2,8 +2,10 @@ import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:path_provider/path_provider.dart';
+import 'package:syncfusion_flutter_pdf/pdf.dart';
 import 'package:syncfusion_flutter_pdfviewer/pdfviewer.dart';
 
+import '../features/translator_bot/ui/ellie_chat_screen.dart';
 import '../models/story.dart';
 import '../services/google_drive_service.dart';
 
@@ -132,11 +134,94 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
     );
   }
 
+  Future<void> _openTranslatorWithEllie() async {
+    final file = _pdfFile;
+    if (file == null || !await file.exists()) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Tệp PDF chưa sẵn sàng để trích xuất văn bản.')),
+        );
+      }
+      return;
+    }
+
+    if (!mounted) return;
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => const Center(
+        child: Card(
+          child: Padding(
+            padding: EdgeInsets.symmetric(horizontal: 24, vertical: 20),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                CircularProgressIndicator(),
+                SizedBox(width: 16),
+                Text('Đang trích xuất văn bản PDF...'),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+
+    try {
+      final bytes = await file.readAsBytes();
+      final document = PdfDocument(inputBytes: bytes);
+      final extractor = PdfTextExtractor(document);
+      final extractedText = extractor.extractText();
+      document.dispose();
+
+      if (mounted) Navigator.of(context, rootNavigator: true).pop();
+
+      if (extractedText.trim().isEmpty) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text(
+                'Tệp PDF này không có lớp text số hóa (dạng scan ảnh) nên không thể trích xuất văn bản trực tiếp.',
+              ),
+            ),
+          );
+        }
+        return;
+      }
+
+      if (mounted) {
+        Navigator.of(context).push(
+          MaterialPageRoute(
+            builder: (_) => EllieChatScreen(
+              initialText: extractedText,
+              initialTitle: widget.story.title,
+            ),
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) Navigator.of(context, rootNavigator: true).pop();
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Lỗi trích xuất PDF: $e')),
+        );
+      }
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final file = _pdfFile;
     return Scaffold(
-      appBar: AppBar(title: Text(widget.story.title)),
+      appBar: AppBar(
+        title: Text(widget.story.title),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.translate_rounded),
+            tooltip: 'Dịch truyện cùng Ellie Bot',
+            onPressed: _openTranslatorWithEllie,
+          ),
+        ],
+      ),
       body: _isLoading
           ? _buildLoadingState()
           : _error != null

@@ -9,6 +9,7 @@ import '../models/story.dart';
 import '../models/plugin_info.dart';
 import '../services/api_service.dart';
 import '../services/extension_service.dart';
+import '../services/local_manga_parser.dart';
 import '../theme/theme_provider.dart';
 import '../utils/file_name_utils.dart';
 import '../widgets/story_cover_image.dart';
@@ -137,11 +138,11 @@ class _HomeScreenState extends State<HomeScreen> {
                     child: OutlinedButton.icon(
                       icon: const Icon(Icons.folder_open),
                       label: const Text(
-                        'Nhập truyện từ máy (EPUB / PDF / TXT)',
+                        'Nhập truyện từ máy (EPUB / PDF / Manga)',
                       ),
                       onPressed: () {
                         Navigator.pop(ctx);
-                        _importStory();
+                        _showImportOptions();
                       },
                     ),
                   ),
@@ -266,10 +267,201 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
-  Future<void> _importStory() async {
+  void _showImportOptions() {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: isDark ? const Color(0xFF1E1E24) : Colors.white,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (ctx) {
+        return SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 16),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Center(
+                  child: Container(
+                    width: 36,
+                    height: 4,
+                    decoration: BoxDecoration(
+                      color: Colors.grey.withAlpha(100),
+                      borderRadius: BorderRadius.circular(2),
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 16),
+                const Text(
+                  'Nhập truyện vào kệ sách',
+                  style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                ),
+                const SizedBox(height: 16),
+                ListTile(
+                  leading: const CircleAvatar(
+                    backgroundColor: Colors.blueAccent,
+                    child: Icon(Icons.description_rounded, color: Colors.white),
+                  ),
+                  title: const Text('Nhập tệp truyện (EPUB, PDF, TXT)'),
+                  subtitle: const Text('Chọn tệp văn bản từ bộ nhớ máy'),
+                  onTap: () {
+                    Navigator.pop(ctx);
+                    _importSingleFileStory();
+                  },
+                ),
+                const SizedBox(height: 8),
+                ListTile(
+                  leading: const CircleAvatar(
+                    backgroundColor: Colors.amber,
+                    child: Icon(Icons.data_object_rounded, color: Colors.white),
+                  ),
+                  title: const Text('Nhập Manga qua tệp chỉ mục (chapter.json)'),
+                  subtitle: const Text('Chọn file chapter.json / story_info.json trong folder truyện tranh'),
+                  onTap: () {
+                    Navigator.pop(ctx);
+                    _importMangaFromChapterJson();
+                  },
+                ),
+                const SizedBox(height: 8),
+                ListTile(
+                  leading: const CircleAvatar(
+                    backgroundColor: Colors.pinkAccent,
+                    child: Icon(Icons.folder_copy_rounded, color: Colors.white),
+                  ),
+                  title: const Text('Nhập cả thư mục ảnh Manga / Truyện tranh'),
+                  subtitle: const Text('Chọn toàn bộ folder chứa các chương hoặc trang ảnh'),
+                  onTap: () {
+                    Navigator.pop(ctx);
+                    _importMangaFolder();
+                  },
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  Future<void> _importMangaFromChapterJson({String? filePath}) async {
+    try {
+      String? targetPath = filePath;
+      if (targetPath == null || targetPath.isEmpty) {
+        final result = await FilePicker.pickFiles(
+          type: FileType.custom,
+          allowedExtensions: ['json'],
+        );
+        if (result == null || result.files.isEmpty || result.files.single.path == null) {
+          return;
+        }
+        targetPath = result.files.single.path!;
+      }
+
+      final parsed = await LocalMangaParser.parse(chapterJsonFilePath: targetPath);
+      if (parsed == null || parsed.chapters.isEmpty) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text(
+                'Không thể trích xuất chương truyện từ file JSON này hoặc không tìm thấy các thư mục ảnh tương ứng.',
+              ),
+            ),
+          );
+        }
+        return;
+      }
+
+      final newStory = Story(
+        id: const Uuid().v4(),
+        title: parsed.title,
+        description: parsed.description,
+        author: parsed.author,
+        genres: ['Manga', 'Truyện tranh'],
+        totalChapters: parsed.chapters.length,
+        localPath: parsed.rootPath,
+        isLocal: true,
+        iconUrl: parsed.coverPath,
+        fileType: 'comic',
+      );
+
+      await ApiService.importLocalStory(newStory);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              'Đã nhận diện thành công "${parsed.title}" (${parsed.chapters.length} chương) từ chapter.json! 🌸',
+            ),
+          ),
+        );
+        _loadStories();
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Lỗi nhập chapter.json: $e')),
+        );
+      }
+    }
+  }
+
+  Future<void> _importMangaFolder() async {
+    try {
+      final String? selectedDir = await FilePicker.getDirectoryPath();
+      if (selectedDir == null || selectedDir.trim().isEmpty) return;
+
+      final parsed = await LocalMangaParser.parse(directoryPath: selectedDir);
+      if (parsed == null || parsed.chapters.isEmpty) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text(
+                'Không tìm thấy ảnh truyện (.jpg, .png...) hoặc file chapter.json trong thư mục đã chọn.',
+              ),
+            ),
+          );
+        }
+        return;
+      }
+
+      final newStory = Story(
+        id: const Uuid().v4(),
+        title: parsed.title,
+        description: parsed.description,
+        author: parsed.author,
+        genres: ['Manga', 'Truyện tranh'],
+        totalChapters: parsed.chapters.length,
+        localPath: parsed.rootPath,
+        isLocal: true,
+        iconUrl: parsed.coverPath,
+        fileType: 'comic',
+      );
+
+      await ApiService.importLocalStory(newStory);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              'Đã thêm truyện tranh "${parsed.title}" (${parsed.chapters.length} chương) vào kệ sách! 🌸',
+            ),
+          ),
+        );
+        _loadStories();
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Lỗi khi nhập thư mục truyện: $e')),
+        );
+      }
+    }
+  }
+
+  Future<void> _importSingleFileStory() async {
     FilePickerResult? result = await FilePicker.pickFiles(
       type: FileType.custom,
-      allowedExtensions: ['epub', 'pdf', 'txt'],
+      allowedExtensions: ['epub', 'pdf', 'txt', 'json'],
     );
 
     if (result != null && result.files.single.path != null) {
@@ -278,12 +470,18 @@ class _HomeScreenState extends State<HomeScreen> {
       final rawExtension =
           result.files.single.extension ??
           (fileName.contains('.') ? fileName.split('.').last : '');
+
+      if (rawExtension.toLowerCase() == 'json' || fileName.toLowerCase().endsWith('.json')) {
+        await _importMangaFromChapterJson(filePath: srcPath);
+        return;
+      }
+
       final extension = FileNameUtils.normalizeExtension(
         rawExtension,
         fallback: 'txt',
       );
       final titleFromFileName = fileName.replaceAll(
-        RegExp(r'\.(epub|pdf|txt)$', caseSensitive: false),
+        RegExp(r'\.(epub|pdf|txt|json)$', caseSensitive: false),
         '',
       );
 
@@ -860,7 +1058,7 @@ class _HomeScreenState extends State<HomeScreen> {
                   IconButton(
                     icon: const Icon(Icons.create_new_folder_outlined),
                     tooltip: 'Nhập truyện',
-                    onPressed: _importStory,
+                    onPressed: _showImportOptions,
                   ),
                   IconButton(
                     icon: Icon(

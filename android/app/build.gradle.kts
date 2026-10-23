@@ -45,6 +45,7 @@ val firebaseProjectId = appConfigValue("FIREBASE_PROJECT_ID", "GCLOUD_PROJECT")
 val firebaseStorageBucket = appConfigValue("FIREBASE_STORAGE_BUCKET")
 val firebaseWebClientId = appConfigValue("FIREBASE_WEB_CLIENT_ID")
 val googleDriveApiKey = appConfigValue("GOOGLE_DRIVE_API_KEY")
+val geminiApiKey = appConfigValue("GEMINI_API_KEY")
 val missingFirebaseConfig = buildList {
     if (firebaseApiKey.isEmpty()) add("FIREBASE_API_KEY")
     if (firebaseAppId.isEmpty()) add("FIREBASE_APP_ID")
@@ -127,6 +128,7 @@ android {
         // Exposed through a MethodChannel so Android builds can use local .env
         // configuration without requiring Flutter --dart-define arguments.
         resValue("string", "vbook_google_drive_api_key", googleDriveApiKey)
+        resValue("string", "vbook_gemini_api_key", geminiApiKey)
 
         // firebase_core resolves these exact names through FirebaseOptions.fromResource().
         if (missingFirebaseConfig.isEmpty()) {

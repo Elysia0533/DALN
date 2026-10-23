@@ -1,4 +1,8 @@
 import 'dart:async';
+import 'dart:io';
+import 'package:file_picker/file_picker.dart';
+import 'package:epubx/epubx.dart' as epubx;
+import 'package:syncfusion_flutter_pdf/pdf.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -75,7 +79,7 @@ class _EllieChatScreenState extends State<EllieChatScreen> {
   @override
   void initState() {
     super.initState();
-    _provider = GeminiTranslationProvider(modelName: 'gemini-2.5-flash');
+    _provider = GeminiTranslationProvider(modelName: 'gemini-3.8-flash');
     _orchestrator = TranslationOrchestrator(provider: _provider);
 
     _loadSavedConfig().then((_) {
@@ -101,13 +105,19 @@ class _EllieChatScreenState extends State<EllieChatScreen> {
 
   Future<void> _loadSavedConfig() async {
     final prefs = await SharedPreferences.getInstance();
-    var model = prefs.getString('ellie_gemini_model') ?? 'gemini-2.5-flash';
-    // Tự động chuẩn hóa nếu trước đó lưu các model hallucinated (3.8, 3.7, 3.6, 3.1)
-    if (model.contains('3.8') || model.contains('3.7') || model.contains('3.6') || model.contains('3.1')) {
-      model = 'gemini-2.5-flash';
+    var model = prefs.getString('ellie_gemini_model') ?? 'gemini-3.8-flash';
+    // Tự động nâng cấp nếu trước đó lưu các model cũ đã ngừng hỗ trợ (1.0, 1.5, 2.0, 2.5)
+    if (model.contains('1.0') ||
+        model.contains('1.5') ||
+        model.contains('2.0') ||
+        model.contains('2.5') ||
+        model == 'gemini-pro') {
+      model = 'gemini-3.8-flash';
       await prefs.setString('ellie_gemini_model', model);
     }
-    final apiKey = prefs.getString('ellie_gemini_api_key') ?? '';
+    final apiKey = await GeminiTranslationProvider.resolveEffectiveKey(
+      candidateKey: prefs.getString('ellie_gemini_api_key'),
+    );
     _provider.modelName = model;
     _provider.apiKey = apiKey;
     if (mounted) setState(() {});
@@ -125,9 +135,110 @@ class _EllieChatScreenState extends State<EllieChatScreen> {
     });
   }
 
+  Future<void> _handlePickFile() async {
+    if (_isProcessing) return;
+    try {
+      final result = await FilePicker.pickFiles(
+        type: FileType.custom,
+        allowedExtensions: ['txt', 'epub', 'md', 'json', 'pdf'],
+      );
+
+      if (result == null || result.files.isEmpty || result.files.single.path == null) {
+        return;
+      }
+
+      final file = File(result.files.single.path!);
+      final fileName = result.files.single.name;
+      final ext = fileName.contains('.') ? fileName.split('.').last.toLowerCase() : '';
+
+      setState(() => _isProcessing = true);
+
+      String content = '';
+      if (ext == 'epub') {
+        try {
+          final bytes = await file.readAsBytes();
+          final book = await epubx.EpubReader.readBook(bytes);
+          final sb = StringBuffer();
+          if (book.Chapters != null) {
+            for (final ch in book.Chapters!) {
+              final html = ch.HtmlContent ?? '';
+              final plain = html
+                  .replaceAll(RegExp(r'<[^>]*>'), ' ')
+                  .replaceAll('&nbsp;', ' ')
+                  .replaceAll(RegExp(r'\s+'), ' ')
+                  .trim();
+              if (plain.isNotEmpty) {
+                sb.writeln(plain);
+                sb.writeln();
+              }
+            }
+          }
+          content = sb.toString().trim();
+        } catch (e) {
+          throw Exception('Không thể đọc file EPUB: $e');
+        }
+      } else if (ext == 'pdf') {
+        try {
+          final bytes = await file.readAsBytes();
+          final document = PdfDocument(inputBytes: bytes);
+          final extractor = PdfTextExtractor(document);
+          content = extractor.extractText();
+          document.dispose();
+          if (content.trim().isEmpty) {
+            throw Exception(
+              'Tệp PDF này không chứa văn bản số (có thể là tài liệu scan dạng ảnh chụp). Ellie chỉ hỗ trợ dịch PDF có chứa văn bản ký tự số.',
+            );
+          }
+        } catch (e) {
+          throw Exception('Không thể trích xuất văn bản từ PDF: $e');
+        }
+      } else {
+        try {
+          content = await file.readAsString();
+        } catch (_) {
+          final bytes = await file.readAsBytes();
+          content = String.fromCharCodes(bytes);
+        }
+      }
+
+      if (content.trim().isEmpty) {
+        throw Exception('Tệp trống hoặc không chứa văn bản đọc được.');
+      }
+
+      final fileSizeKb = (await file.length() / 1024).toStringAsFixed(1);
+      final displayTitle = fileName.replaceAll(RegExp(r'\.[a-zA-Z0-9]+$'), '');
+
+      setState(() {
+        _messages.add(
+          _ChatMessage(
+            text: '📎 Đã đính kèm tệp: **$fileName** ($fileSizeKb KB)',
+            isUser: true,
+          ),
+        );
+      });
+      _scrollToBottom();
+
+      await _startNewTranslationSession(content, displayTitle);
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Lỗi nhập tệp: $e')),
+        );
+      }
+    } finally {
+      if (mounted) {
+        setState(() => _isProcessing = false);
+      }
+    }
+  }
+
   Future<void> _handleSendMessage() async {
     final text = _textCtrl.text.trim();
     if (text.isEmpty || _isProcessing) return;
+
+    if (_provider.apiKey.isEmpty) {
+      await _loadSavedConfig();
+    }
 
     _textCtrl.clear();
     setState(() {
@@ -271,12 +382,10 @@ class _EllieChatScreenState extends State<EllieChatScreen> {
     final customModelCtrl = TextEditingController(text: currentModel);
 
     final defaultModels = [
-      {'id': 'gemini-2.5-flash', 'name': 'Gemini 2.5 Flash (Khuyên dùng - Nhanh, chuẩn)'},
-      {'id': 'gemini-2.0-flash', 'name': 'Gemini 2.0 Flash (Tốc độ cao)'},
-      {'id': 'gemini-2.5-pro', 'name': 'Gemini 2.5 Pro (Văn phong mượt mà)'},
-      {'id': 'gemini-1.5-flash', 'name': 'Gemini 1.5 Flash (Bản nhẹ, ổn định)'},
-      {'id': 'gemini-1.5-pro', 'name': 'Gemini 1.5 Pro'},
-      {'id': 'gemini-2.0-flash-lite', 'name': 'Gemini 2.0 Flash Lite'},
+      {'id': 'gemini-3.8-flash', 'name': 'Gemini 3.8 Flash (Khuyên dùng - Nhanh, chuẩn nhất)'},
+      {'id': 'gemini-3.5-flash', 'name': 'Gemini 3.5 Flash (Bản chuẩn ổn định)'},
+      {'id': 'gemini-3.5-flash-lite', 'name': 'Gemini 3.5 Flash Lite (Tiết kiệm quota)'},
+      {'id': 'gemini-flash-latest', 'name': 'Gemini Flash Latest (Tự cập nhật bản mới nhất)'},
     ];
 
     List<Map<String, String>> dynamicModels = List.from(defaultModels);
@@ -354,6 +463,22 @@ class _EllieChatScreenState extends State<EllieChatScreen> {
                         testSuccess = null;
                       }),
                     ),
+                    if (keyCtrl.text.trim().isNotEmpty &&
+                        !GeminiTranslationProvider.isValidKeyFormat(keyCtrl.text.trim())) ...[
+                      const SizedBox(height: 4),
+                      Row(
+                        children: [
+                          Icon(Icons.info_outline, size: 14, color: Colors.orange.shade700),
+                          const SizedBox(width: 4),
+                          Expanded(
+                            child: Text(
+                              'Lưu ý: API Key của Google AI Studio thường bắt đầu bằng "AIzaSy" (39 ký tự).',
+                              style: TextStyle(fontSize: 11, color: Colors.orange.shade700),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
                     const SizedBox(height: 4),
                     Align(
                       alignment: Alignment.centerLeft,
@@ -419,7 +544,7 @@ class _EllieChatScreenState extends State<EllieChatScreen> {
                         controller: customModelCtrl,
                         decoration: const InputDecoration(
                           labelText: 'Tên model tùy chỉnh',
-                          hintText: 'vd: gemini-2.0-flash',
+                          hintText: 'vd: gemini-3.8-flash',
                           border: OutlineInputBorder(),
                         ),
                       ),
@@ -494,7 +619,7 @@ class _EllieChatScreenState extends State<EllieChatScreen> {
                             ? null
                             : () async {
                                 final key = keyCtrl.text.trim();
-                                final model = (chosenModel.isNotEmpty ? chosenModel : 'gemini-2.5-flash');
+                                final model = (chosenModel.isNotEmpty ? chosenModel : 'gemini-3.8-flash');
                                 setDialogState(() {
                                   isTesting = true;
                                   testStatusMessage = null;
@@ -574,7 +699,7 @@ class _EllieChatScreenState extends State<EllieChatScreen> {
                   final chosen = currentModel == 'custom'
                       ? customModelCtrl.text.trim()
                       : currentModel;
-                  final cleanModel = chosen.isNotEmpty ? chosen : 'gemini-2.5-flash';
+                  final cleanModel = chosen.isNotEmpty ? chosen : 'gemini-3.8-flash';
                   final cleanKey = keyCtrl.text.trim();
 
                   await prefs.setString('ellie_gemini_model', cleanModel);
@@ -760,13 +885,18 @@ class _EllieChatScreenState extends State<EllieChatScreen> {
           // Chat Input Field
           SafeArea(
             child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
               decoration: BoxDecoration(
                 color: Theme.of(context).cardColor,
                 boxShadow: const [BoxShadow(color: Colors.black12, blurRadius: 4)],
               ),
               child: Row(
                 children: [
+                  IconButton(
+                    icon: const Icon(Icons.attach_file_rounded, color: Colors.pinkAccent),
+                    tooltip: 'Đính kèm tệp từ máy (.txt, .epub, .md)',
+                    onPressed: _isProcessing ? null : _handlePickFile,
+                  ),
                   Expanded(
                     child: TextField(
                       controller: _textCtrl,

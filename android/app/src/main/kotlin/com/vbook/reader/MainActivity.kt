@@ -61,6 +61,9 @@ class MainActivity : FlutterActivity() {
                 "getGoogleDriveApiKey" -> {
                     result.success(getString(R.string.vbook_google_drive_api_key).trim())
                 }
+                "getGeminiApiKey" -> {
+                    result.success(getString(R.string.vbook_gemini_api_key).trim())
+                }
                 "getGoogleApiKeyRestrictionHeaders" -> {
                     val certSha1 = signingCertificateSha1Hex()
                     if (certSha1 == null) {

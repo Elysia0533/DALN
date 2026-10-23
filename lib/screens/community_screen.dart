@@ -36,9 +36,8 @@ class _CommunityScreenState extends State<CommunityScreen> {
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
-    final loadToken = context.select<UserProvider, String>(
-      (user) => user.isLoggedIn ? user.token : 'guest',
-    );
+    final user = context.watch<UserProvider>();
+    final loadToken = user.isLoggedIn ? user.token : 'guest';
     if (_loadedToken != loadToken) {
       _loadedToken = loadToken;
       WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -164,8 +163,10 @@ class _CommunityScreenState extends State<CommunityScreen> {
     if (trimmed.startsWith('http://') || trimmed.startsWith('https://')) {
       return NetworkImage(trimmed);
     }
-    final file = File(trimmed);
-    if (file.existsSync()) return FileImage(file);
+    try {
+      final file = File(trimmed);
+      if (file.existsSync()) return FileImage(file);
+    } catch (_) {}
     return null;
   }
 
@@ -700,8 +701,10 @@ class _MessageAvatar extends StatelessWidget {
     if (trimmed.startsWith('http://') || trimmed.startsWith('https://')) {
       return NetworkImage(trimmed);
     }
-    final file = File(trimmed);
-    if (file.existsSync()) return FileImage(file);
+    try {
+      final file = File(trimmed);
+      if (file.existsSync()) return FileImage(file);
+    } catch (_) {}
     return null;
   }
 

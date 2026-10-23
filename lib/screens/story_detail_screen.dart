@@ -11,6 +11,7 @@ import 'chapter_reader_screen.dart';
 import 'epub_reader_screen.dart';
 import 'pdf_reader_screen.dart';
 import 'reading_screen.dart';
+import 'local_comic_reader_screen.dart';
 import 'online_story_detail_screen.dart';
 import '../widgets/story_cover_image.dart';
 
@@ -380,6 +381,11 @@ class _StoryDetailScreenState extends State<StoryDetailScreen> {
       await Navigator.push(
         context,
         MaterialPageRoute(builder: (_) => ChapterReaderScreen(story: _story)),
+      );
+    } else if (fileType == 'comic') {
+      await Navigator.push(
+        context,
+        MaterialPageRoute(builder: (_) => LocalComicReaderScreen(story: _story)),
       );
     } else {
       await Navigator.push(

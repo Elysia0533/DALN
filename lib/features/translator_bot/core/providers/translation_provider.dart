@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
+import '../../../../services/app_identity_service.dart';
 import '../models/translation_models.dart';
 
 class SegmentTranslationResult {
@@ -73,7 +74,7 @@ class GeminiTranslationProvider implements TranslationProvider {
   String get id => 'gemini_provider';
 
   @override
-  String get name => 'Google Gemini (2.5 Flash / 2.5 Pro)';
+  String get name => 'Google Gemini (2.0 Flash / 1.5 Flash)';
 
   static const String _envGeminiApiKey = String.fromEnvironment('GEMINI_API_KEY');
 
@@ -81,6 +82,42 @@ class GeminiTranslationProvider implements TranslationProvider {
   static String resolveKey(String? candidate) {
     if (candidate == null) return '';
     return candidate.trim().replaceAll(RegExp(r'[\r\n\t\s\u200B\uFEFF"\x27]'), '');
+  }
+
+  /// Kiểm tra định dạng sơ bộ của Google Gemini API Key
+  /// Hỗ trợ cả định dạng mới của Google AI Studio (bắt đầu bằng AQ.)
+  /// và định dạng truyền thống (bắt đầu bằng AIzaSy, 39 ký tự)
+  static bool isValidKeyFormat(String key) {
+    final clean = resolveKey(key);
+    if (clean.startsWith('AQ.') && clean.length >= 30) return true;
+    if (clean.startsWith('AIzaSy') && clean.length == 39) return true;
+    return false;
+  }
+
+  /// Lấy API Key khả dụng nhất theo thứ tự ưu tiên:
+  /// 1. Key người dùng truyền vào / đã gán trực tiếp
+  /// 2. Key đã lưu trong SharedPreferences (ellie_gemini_api_key)
+  /// 3. Key cấu hình tĩnh --dart-define (GEMINI_API_KEY)
+  /// 4. Key cấu hình trong .env đọc từ Native Android (AppIdentityService)
+  static Future<String> resolveEffectiveKey({String? candidateKey}) async {
+    final direct = resolveKey(candidateKey);
+    if (direct.isNotEmpty) return direct;
+
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final savedKey = resolveKey(prefs.getString('ellie_gemini_api_key'));
+      if (savedKey.isNotEmpty) return savedKey;
+    } catch (_) {}
+
+    final envKey = resolveKey(_envGeminiApiKey);
+    if (envKey.isNotEmpty) return envKey;
+
+    try {
+      final nativeKey = resolveKey(await AppIdentityService.geminiApiKey());
+      if (nativeKey.isNotEmpty) return nativeKey;
+    } catch (_) {}
+
+    return '';
   }
 
   /// Bóc tách chuỗi JSON sạch khi Gemini trả về kết quả bọc trong markdown code fence
@@ -97,11 +134,19 @@ class GeminiTranslationProvider implements TranslationProvider {
     return text.trim();
   }
 
-  /// Tải cấu hình đã lưu từ SharedPreferences
+  /// Tải cấu hình đã lưu từ SharedPreferences kết hợp fallback từ .env
   static Future<GeminiTranslationProvider> fromPreferences() async {
     final prefs = await SharedPreferences.getInstance();
-    final model = prefs.getString('ellie_gemini_model') ?? 'gemini-2.5-flash';
-    final key = prefs.getString('ellie_gemini_api_key') ?? '';
+    var model = prefs.getString('ellie_gemini_model') ?? 'gemini-3.8-flash';
+    // Tự động nâng cấp các model cũ không còn được hỗ trợ sang gemini-3.8-flash
+    if (model.contains('1.0') ||
+        model.contains('1.5') ||
+        model.contains('2.0') ||
+        model.contains('2.5') ||
+        model == 'gemini-pro') {
+      model = 'gemini-3.8-flash';
+    }
+    final key = await resolveEffectiveKey(candidateKey: prefs.getString('ellie_gemini_api_key'));
     return GeminiTranslationProvider(
       modelName: model,
       apiKey: key,
@@ -115,7 +160,7 @@ class GeminiTranslationProvider implements TranslationProvider {
   String apiKey;
 
   GeminiTranslationProvider({
-    this.modelName = 'gemini-2.5-flash',
+    this.modelName = 'gemini-3.8-flash',
     String? apiKey,
   }) : apiKey = resolveKey(apiKey ?? _envGeminiApiKey);
 
@@ -125,7 +170,7 @@ class GeminiTranslationProvider implements TranslationProvider {
     if (cleanKey.isEmpty) {
       throw StateError('Vui lòng nhập API Key để lấy danh sách mô hình từ Google AI Studio!');
     }
-    final url = Uri.parse('https://generativelanguage.googleapis.com/v1beta/models?key=$cleanKey');
+    final url = Uri.parse('https://generativelanguage.googleapis.com/v1beta/models');
     final resp = await http.get(
       url,
       headers: {
@@ -148,25 +193,32 @@ class GeminiTranslationProvider implements TranslationProvider {
     final json = jsonDecode(resp.body) as Map<String, dynamic>;
     final modelsList = json['models'] as List? ?? [];
     return modelsList
+        .where((m) {
+          final methods = m['supportedGenerationMethods'] as List? ?? [];
+          return methods.contains('generateContent');
+        })
         .map((m) => m['name']?.toString().replaceFirst('models/', '') ?? '')
         .where((m) =>
             m.isNotEmpty &&
             m.contains('gemini') &&
             !m.contains('embedding') &&
             !m.contains('aqa') &&
-            !m.contains('imagen'))
+            !m.contains('imagen') &&
+            !m.contains('tts') &&
+            !m.contains('computer-use') &&
+            !m.contains('robotics'))
         .toList();
   }
 
   /// Kiểm tra kết nối thử nghiệm với API Key và Model được chỉ định
   Future<String> testConnection({String? testApiKey, String? testModelName}) async {
-    final keyToUse = resolveKey(testApiKey ?? apiKey);
+    final keyToUse = await resolveEffectiveKey(candidateKey: testApiKey ?? apiKey);
     if (keyToUse.isEmpty) {
       throw StateError('Vui lòng nhập API Key trước khi kiểm tra kết nối!');
     }
     final modelToUse = (testModelName ?? modelName).trim().isNotEmpty
         ? (testModelName ?? modelName).trim()
-        : 'gemini-2.5-flash';
+        : 'gemini-3.8-flash';
 
     final payload = {
       'contents': [
@@ -180,7 +232,7 @@ class GeminiTranslationProvider implements TranslationProvider {
     };
 
     final url = Uri.parse(
-      'https://generativelanguage.googleapis.com/v1beta/models/$modelToUse:generateContent?key=$keyToUse',
+      'https://generativelanguage.googleapis.com/v1beta/models/$modelToUse:generateContent',
     );
 
     http.Response resp;
@@ -218,7 +270,7 @@ class GeminiTranslationProvider implements TranslationProvider {
     } else if (resp.statusCode == 401 || resp.statusCode == 403) {
       throw StateError('API Key bị từ chối hoặc hết hạn (401/403):\n$errorMsg\nHãy kiểm tra lại hoặc tạo key mới tại https://aistudio.google.com');
     } else if (resp.statusCode == 404) {
-      throw StateError('Mô hình "$modelToUse" không tồn tại cho v1beta (404):\n$errorMsg\nHãy đổi sang "gemini-2.5-flash" hoặc "gemini-2.0-flash".');
+      throw StateError('Mô hình "$modelToUse" không tồn tại hoặc đã ngừng hỗ trợ (404):\n$errorMsg\nHãy đổi sang "gemini-3.8-flash" hoặc "gemini-3.5-flash".');
     } else if (resp.statusCode == 429) {
       throw StateError('Đã hết hạn mức gọi API (Quota 429):\n$errorMsg\nVui lòng đợi 1 phút hoặc kiểm tra quota.');
     } else {
@@ -226,14 +278,14 @@ class GeminiTranslationProvider implements TranslationProvider {
     }
   }
 
-  /// Gọi mô hình Gemini
+  /// Gọi mô hình Gemini kèm cơ chế Fallback sang gemini-3.5-flash-lite nếu model hiện tại gặp lỗi 404/429
   Future<String> _callModel({
     required String prompt,
     String? systemInstruction,
     bool jsonOutput = false,
     double temperature = 0.2,
   }) async {
-    final effectiveKey = resolveKey(apiKey.trim().isNotEmpty ? apiKey.trim() : _envGeminiApiKey.trim());
+    final effectiveKey = await resolveEffectiveKey(candidateKey: apiKey);
 
     if (effectiveKey.isEmpty) {
       throw StateError(
@@ -242,13 +294,40 @@ class GeminiTranslationProvider implements TranslationProvider {
       );
     }
 
-    return await _callDirectRest(
-      prompt: prompt,
-      apiKeyToUse: effectiveKey,
-      systemInstruction: systemInstruction,
-      jsonOutput: jsonOutput,
-      temperature: temperature,
-    );
+    if (apiKey.isEmpty && effectiveKey.isNotEmpty) {
+      apiKey = effectiveKey;
+    }
+
+    try {
+      return await _callDirectRest(
+        prompt: prompt,
+        apiKeyToUse: effectiveKey,
+        systemInstruction: systemInstruction,
+        jsonOutput: jsonOutput,
+        temperature: temperature,
+      );
+    } catch (e) {
+      final errStr = e.toString().toLowerCase();
+      // Nếu gặp lỗi 404 (model không tìm thấy/ngừng hỗ trợ) hoặc 429 (hết quota) và model hiện tại khác gemini-3.5-flash-lite, tự động thử fallback
+      if ((errStr.contains('404') || errStr.contains('không tồn tại') || errStr.contains('no longer available') || errStr.contains('429')) &&
+          modelName != 'gemini-3.5-flash-lite') {
+        try {
+          final fallbackResult = await _callDirectRest(
+            prompt: prompt,
+            apiKeyToUse: effectiveKey,
+            systemInstruction: systemInstruction,
+            jsonOutput: jsonOutput,
+            temperature: temperature,
+            overrideModel: 'gemini-3.5-flash-lite',
+          );
+          modelName = 'gemini-3.5-flash-lite';
+          return fallbackResult;
+        } catch (_) {
+          rethrow;
+        }
+      }
+      rethrow;
+    }
   }
 
   /// Gọi trực tiếp Google Gemini REST API v1beta
@@ -258,6 +337,7 @@ class GeminiTranslationProvider implements TranslationProvider {
     String? systemInstruction,
     bool jsonOutput = false,
     double temperature = 0.2,
+    String? overrideModel,
   }) async {
     final cleanKey = resolveKey(apiKeyToUse);
     if (cleanKey.isEmpty) {
@@ -266,7 +346,9 @@ class GeminiTranslationProvider implements TranslationProvider {
         'Vui lòng bấm biểu tượng bánh răng ⚙️ ở góc trên để nhập API Key từ Google AI Studio (miễn phí tại https://aistudio.google.com) nhé!',
       );
     }
-    final cleanModel = modelName.trim().isNotEmpty ? modelName.trim() : 'gemini-2.5-flash';
+    final cleanModel = (overrideModel ?? modelName).trim().isNotEmpty
+        ? (overrideModel ?? modelName).trim()
+        : 'gemini-3.8-flash';
 
     final payload = <String, dynamic>{
       'contents': [
@@ -291,7 +373,7 @@ class GeminiTranslationProvider implements TranslationProvider {
     }
 
     final url = Uri.parse(
-      'https://generativelanguage.googleapis.com/v1beta/models/$cleanModel:generateContent?key=$cleanKey',
+      'https://generativelanguage.googleapis.com/v1beta/models/$cleanModel:generateContent',
     );
 
     http.Response resp;
@@ -322,7 +404,7 @@ class GeminiTranslationProvider implements TranslationProvider {
       } else if (resp.statusCode == 401 || resp.statusCode == 403) {
         throw StateError('API Key không có quyền truy cập hoặc bị khóa (401/403): $errorMsg\nHãy kiểm tra lại key trên Google AI Studio.');
       } else if (resp.statusCode == 404) {
-        throw StateError('Mô hình "$cleanModel" không tồn tại hoặc chưa hỗ trợ: $errorMsg\nHãy chọn "gemini-2.5-flash" hoặc "gemini-2.0-flash" trong ⚙️ nhé!');
+        throw StateError('Mô hình "$cleanModel" không tồn tại hoặc đã ngừng hỗ trợ: $errorMsg\nHãy chọn "gemini-3.8-flash" hoặc "gemini-3.5-flash" trong ⚙️ nhé!');
       } else if (resp.statusCode == 429) {
         throw StateError('Đã vượt quá hạn mức gọi API (Quota 429). Vui lòng đợi 1 phút rồi thử lại ($errorMsg)');
       } else {
